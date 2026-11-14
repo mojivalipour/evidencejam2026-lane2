@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,10 +62,16 @@ class LLMClient:
         *,
         timeout: float = 60.0,
         retries: int = 1,
+        backoff: float = 1.0,
+        sleep: Callable[[float], None] = time.sleep,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        if retries < 0:
+            raise ValueError("retries must be >= 0")
         self._model = settings.model
         self._retries = retries
+        self._backoff = backoff
+        self._sleep = sleep
         self._http = httpx.Client(
             base_url=settings.url.rstrip("/"),
             headers={"Authorization": f"Bearer {settings.api_key}"},
@@ -78,7 +85,7 @@ class LLMClient:
         *,
         temperature: float = 0.0,
         max_tokens: int | None = None,
-        thinking: bool = True,
+        thinking: bool = False,
     ) -> ChatResult:
         payload: dict[str, Any] = {
             "model": self._model,
@@ -93,8 +100,15 @@ class LLMClient:
         data = self._post_with_retry(payload)
 
         usage = data.get("usage") or {}
-        choice = data["choices"][0]
+        try:
+            choice = data["choices"][0]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMResponseError("reply has no choices") from exc
+        if not isinstance(choice, Mapping):
+            raise LLMResponseError("reply choice is not an object")
         content = (choice.get("message") or {}).get("content")
+        if content is not None and not isinstance(content, str):
+            raise LLMResponseError(f"content has unexpected type {type(content).__name__}")
         log.info(
             "llm usage prompt_tokens=%s completion_tokens=%s finish_reason=%s",
             usage.get("prompt_tokens"),
@@ -115,21 +129,37 @@ class LLMClient:
     def close(self) -> None:
         self._http.close()
 
+    def __enter__(self) -> LLMClient:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
     def _post_with_retry(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST once, plus `retries` more times on timeouts, connection errors, or 5xx replies."""
+        """POST once, plus `retries` more times on timeouts, connection errors, 429, or 5xx replies.
+
+        Other 4xx replies are not retried. Waits `backoff * 2**(attempt-1)` seconds between attempts.
+        """
         attempts = self._retries + 1
         for attempt in range(1, attempts + 1):
+            retryable_reason: str | None = None
             try:
                 response = self._http.post("/chat/completions", json=payload)
-                if response.status_code >= 500 and attempt < attempts:
-                    log.warning("llm server error %s; retrying (%d/%d)", response.status_code, attempt, attempts)
-                    continue
-                response.raise_for_status()
-                return response.json()
+                status = response.status_code
+                if (status == 429 or status >= 500) and attempt < attempts:
+                    retryable_reason = f"http {status}"
+                else:
+                    response.raise_for_status()
+                    try:
+                        return response.json()
+                    except ValueError as exc:
+                        raise LLMResponseError("reply is not valid JSON") from exc
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 if attempt == attempts:
                     raise
-                log.warning("llm transport error %s; retrying (%d/%d)", type(exc).__name__, attempt, attempts)
+                retryable_reason = type(exc).__name__
+            log.warning("llm %s; retrying (%d/%d)", retryable_reason, attempt, attempts)
+            self._sleep(self._backoff * 2 ** (attempt - 1))
         raise AssertionError("unreachable")
 
 
@@ -141,8 +171,12 @@ if __name__ == "__main__":
     except LLMConfigError as exc:
         raise SystemExit(f"{exc}. Set them in .env or the shell, then retry.")
     client = LLMClient(settings)
+    messages = [{"role": "user", "content": "Reply with the single word OK."}]
     try:
-        result = client.chat([{"role": "user", "content": "Reply with the single word OK."}], max_tokens=8)
+        # Thinking is disabled so the short budget is spent on the answer, not on reasoning.
+        print(f"query: {messages}")
+        result = client.chat(messages, max_tokens=64, thinking=False)
+        print(f"response: {result.text!r}")
         print(f"model {settings.model} replied: {result.text.strip()!r}")
     finally:
         client.close()
