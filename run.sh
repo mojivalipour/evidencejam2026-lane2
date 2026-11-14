@@ -35,7 +35,7 @@ fi
 GRAPH="$ROOT/causal_graph.json"
 
 if command -v uv >/dev/null 2>&1; then
-    exec uv run --quiet causa-nostra run "$QUESTIONS" "$OUTPUT" --graph "$GRAPH"
+    exec uv run --locked --quiet causa-nostra run "$QUESTIONS" "$OUTPUT" --graph "$GRAPH"
 fi
 
 exec python3 -m causa_nostra.cli run "$QUESTIONS" "$OUTPUT" --graph "$GRAPH"

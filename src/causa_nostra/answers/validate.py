@@ -8,6 +8,7 @@ evidence trace.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 
 from causa_nostra.answers.models import AnswerEntry, AnswersFile
 from causa_nostra.graph.store import GraphStore
@@ -21,10 +22,23 @@ def check_entry(entry: AnswerEntry, store: GraphStore) -> list[str]:
     ]
 
 
+def check_extras(entry: AnswerEntry, repo_root: Path) -> list[str]:
+    """Extras must be repo-relative paths to files that exist."""
+    problems = []
+    for extra in entry.extras:
+        path = Path(extra)
+        if path.is_absolute() or ".." in path.parts:
+            problems.append(f"{entry.id}: extra {extra} must be a relative path inside the repo")
+        elif not (repo_root / path).is_file():
+            problems.append(f"{entry.id}: extra {extra} does not exist")
+    return problems
+
+
 def check_file(
     answers: AnswersFile,
     store: GraphStore,
     question_ids: Iterable[str],
+    repo_root: Path | None = None,
 ) -> list[str]:
     expected = list(question_ids)
     expected_set = set(expected)
@@ -35,6 +49,8 @@ def check_file(
     problems += [f"answer for unknown question {aid}" for aid in returned_set - expected_set]
     for entry in answers.answers:
         problems.extend(check_entry(entry, store))
+        if repo_root is not None:
+            problems.extend(check_extras(entry, repo_root))
     return problems
 
 

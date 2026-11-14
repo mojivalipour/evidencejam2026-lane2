@@ -8,12 +8,15 @@ most `max_revisions` times.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 
 from causa_nostra.answers.models import AnswerEntry, AnswersFile, TEAM_NAME
 from causa_nostra.answers.validate import check_entry, check_file
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.stages import Stages
 from causa_nostra.pipeline.types import Question
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class DraftRejected(RuntimeError):
@@ -46,6 +49,25 @@ def answer_question(
     raise DraftRejected(f"{question.id}: unresolved after revisions: {'; '.join(problems)}")
 
 
+def _unresolved_entry(question: Question, reason: str) -> AnswerEntry:
+    """Entry for a question whose draft could not be verified.
+
+    The challenge scores a missing entry as wrong at full confidence, so every
+    input question must get an entry. Confidence 0.0 states that the graph is
+    not known to lack evidence; the reason is recorded in the answer text.
+    """
+    return AnswerEntry(
+        id=question.id,
+        status="no_evidence",
+        answer=f"Could not produce a verified answer: {reason}",
+        direction=None,
+        confidence=0.0,
+        certainty=None,
+        edge_ids=[],
+        searched_for="pipeline failed before a verified answer was produced",
+    )
+
+
 def run_pipeline(
     questions: Iterable[Question],
     store: GraphStore,
@@ -54,10 +76,15 @@ def run_pipeline(
     max_revisions: int = 1,
 ) -> AnswersFile:
     questions = list(questions)
-    entries = [answer_question(q, store, stages, max_revisions=max_revisions) for q in questions]
+    entries: list[AnswerEntry] = []
+    for question in questions:
+        try:
+            entries.append(answer_question(question, store, stages, max_revisions=max_revisions))
+        except DraftRejected as exc:
+            entries.append(_unresolved_entry(question, str(exc)))
     answers = AnswersFile(team=TEAM_NAME, answers=entries)
 
-    problems = check_file(answers, store, (q.id for q in questions))
+    problems = check_file(answers, store, (q.id for q in questions), repo_root=REPO_ROOT)
     if problems:
         raise ValueError("invalid answers: " + "; ".join(problems))
     return answers
