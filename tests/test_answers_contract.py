@@ -88,5 +88,6 @@ def test_rubric_weights_sum_to_one_and_score_deterministically():
     assert round(sum(ANSWERED_WEIGHTS.values()), 6) == 1.0
     assert round(sum(NO_EVIDENCE_WEIGHTS.values()), 6) == 1.0
     full = weighted_score({k: "pass" for k in ANSWERED_WEIGHTS}, ANSWERED_WEIGHTS)
-    half = weighted_score({k: "partial" for k in ANSWERED_WEIGHTS}, ANSWERED_WEIGHTS)
-    assert full == 1.0 and half == 0.5
+    zero = weighted_score({k: "irrelevant" for k in ANSWERED_WEIGHTS}, ANSWERED_WEIGHTS)
+    worst = weighted_score({k: "fail" for k in ANSWERED_WEIGHTS}, ANSWERED_WEIGHTS)
+    assert full == 1.0 and zero == 0.0 and worst == -1.0
