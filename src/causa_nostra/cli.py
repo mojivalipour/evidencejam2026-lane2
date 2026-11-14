@@ -15,8 +15,8 @@ from pathlib import Path
 from causa_nostra.camo_rules.checks import check_graph
 from causa_nostra.camo_rules.schema import validate_graph_file
 from causa_nostra.graph.store import GraphStore
+from causa_nostra.pipeline.batch import run_batch
 from causa_nostra.pipeline.questions import load_questions
-from causa_nostra.pipeline.run import run_pipeline
 from causa_nostra.pipeline.stages import build_placeholder_stages
 
 DEFAULT_GRAPH = "causal_graph.json"
@@ -44,8 +44,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     store = GraphStore.from_json(args.graph)
     questions = load_questions(args.questions)
     stages = build_placeholder_stages(store)
-    answers = run_pipeline(questions, store, stages)
-    Path(args.output).write_text(answers.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    answers = run_batch(questions, store, stages, args.output)
     print(f"wrote {len(answers.answers)} answers to {args.output}")
     return 0
 
