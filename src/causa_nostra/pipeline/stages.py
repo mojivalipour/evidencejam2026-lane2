@@ -1,8 +1,7 @@
-"""Stage interfaces. Each stage is injectable, so it can be tested or replaced alone.
+"""Stage interfaces and the production builder.
 
-Only `build_placeholder_stages` exists today. It is a no-LLM placeholder. Qwen-backed
-implementations belong in their own modules and should be wired in a future
-builder once they exist.
+`Stages` is the injectable contract that `pipeline.run` and `pipeline.batch` depend on.
+`build_agent_stages` wires the three LLM agents and retrieval into it.
 """
 
 from __future__ import annotations
@@ -10,6 +9,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from causa_nostra.agents.base import ChatClient
+from causa_nostra.agents.question_processor import QuestionProcessor
+from causa_nostra.agents.reasoner import Reasoner
+from causa_nostra.agents.verifier import Verifier
 from causa_nostra.answers.models import AnswerEntry
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.types import Question, QuestionFrame, Verification
@@ -34,73 +37,30 @@ class Stages:
     verify: Verify
 
 
-_STOPWORDS = frozenset(
-    "what does do is the of on to in and or a an how effect effects affect affects "
-    "by for with from which are be it its".split()
-)
+def build_agent_stages(store: GraphStore, client: ChatClient, top_k: int = 20) -> Stages:
+    retrieval = RetrievalPipeline(build_records(store), top_k=top_k)
+    processor = QuestionProcessor(client)
+    reasoner = Reasoner(client)
+    verifier = Verifier(client)
 
-
-def _terms(text: str) -> list[str]:
-    words = (w.strip("?.,:;()\"'").lower() for w in text.split())
-    return sorted({w for w in words if w and w not in _STOPWORDS})
-
-
-def build_placeholder_stages(store: GraphStore, top_k: int = 20) -> Stages:
-    """Runnable end-to-end placeholder: no LLM.
-
-    Retrieval is Haystack BM25 over the evidence records. Reasoning and
-    verification are placeholders: every draft is marked as unreliable
-    (confidence 0.0) and says that reasoning is not implemented yet.
-    """
-    records_all = build_records(store)
-    retrieval = RetrievalPipeline(records_all, top_k=top_k)
-
-    def understand(question: Question) -> QuestionFrame:
-        return QuestionFrame(
-            question_id=question.id,
-            intervention=question.question,
-            outcome="",
-            search_terms=_terms(question.question),
-        )
-
-    def retrieve(frame: QuestionFrame) -> list[EvidenceRecord]:
-        return retrieval.retrieve(frame)
-
-    def reason(
-        question: Question,
-        frame: QuestionFrame,
-        records: list[EvidenceRecord],
-        feedback: list[str],
-    ) -> AnswerEntry:
-        return AnswerEntry(
-            id=question.id,
-            status="no_evidence",
-            answer=(
-                "Placeholder: reasoning stage not implemented. "
-                f"{len(records)} candidate edge(s) retrieved, none assessed."
-            ),
-            direction=None,
-            confidence=0.0,
-            certainty=None,
-            edge_ids=[],
-            searched_for=f"keyword search over edge records for terms: {', '.join(frame.search_terms)}",
-        )
-
-    def verify(question: Question, draft: AnswerEntry, records: list[EvidenceRecord]) -> Verification:
-        return Verification(passed=True, criteria={}, problems=[])
-
-    return Stages(understand=understand, retrieve=retrieve, reason=reason, verify=verify)
+    return Stages(
+        understand=processor.run,
+        retrieve=retrieval.retrieve,
+        reason=reasoner.run,
+        verify=verifier.run,
+    )
 
 
 if __name__ == "__main__":
-    # Demo: run the placeholder stages on the first three practice questions.
-    from causa_nostra.graph.store import GraphStore
-    from causa_nostra.pipeline.questions import load_questions
+    # Demo: answer one question end to end with the three agents and the real endpoint.
+    from causa_nostra.llm.client import LLMClient, LLMSettings
+    from causa_nostra.pipeline.run import answer_question
 
     store = GraphStore.from_json("causal_graph.json")
-    stages = build_placeholder_stages(store)
-    for question in load_questions("questions.yaml")[:3]:
-        frame = stages.understand(question)
-        records = stages.retrieve(frame)
-        draft = stages.reason(question, frame, records, [])
-        print(f"{question.id}: {len(records)} candidates -> {draft.status}")
+    client = LLMClient(LLMSettings.from_env())
+    try:
+        question = Question(id="demo", question="What does burning do to non-native grass cover?")
+        entry = answer_question(question, store, build_agent_stages(store, client))
+        print(entry.model_dump_json(indent=2))
+    finally:
+        client.close()

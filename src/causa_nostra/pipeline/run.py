@@ -94,9 +94,14 @@ if __name__ == "__main__":
     # Demo: run the whole orchestration on the first three practice questions.
     from causa_nostra.graph.store import GraphStore
     from causa_nostra.pipeline.questions import load_questions
-    from causa_nostra.pipeline.stages import build_placeholder_stages
+    from causa_nostra.llm.client import LLMClient, LLMSettings
+    from causa_nostra.pipeline.stages import build_agent_stages
 
     store = GraphStore.from_json("causal_graph.json")
     questions = load_questions("questions.yaml")[:3]
-    answers = run_pipeline(questions, store, build_placeholder_stages(store))
-    print(answers.model_dump_json(indent=2))
+    client = LLMClient(LLMSettings.from_env())
+    try:
+        answers = run_pipeline(questions, store, build_agent_stages(store, client))
+        print(answers.model_dump_json(indent=2))
+    finally:
+        client.close()
