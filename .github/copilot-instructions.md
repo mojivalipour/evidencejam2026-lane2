@@ -227,6 +227,14 @@ Pin dependencies and document installation. During pipeline execution, the only 
 
 Keep model calls, prompts, and retries small. Log token usage where available.
 
+## Runnable Modules
+
+Every module under `src/causa_nostra/` must run on its own with `python -m causa_nostra.<package>.<module>`, following the existing pattern:
+- End each module with an `if __name__ == "__main__":` demo that exercises its main function on small inputs.
+- Demos call the real LLM endpoint through `LLMClient` and `LLMSettings.from_env()`, so each demo checks the module works in practice. Keep demos to one or two small calls. If the `BRINE_*` variables are missing, let the error stop the demo.
+- Demos read `causal_graph.json` or `questions.yaml` from the repo root, and must not write into tracked paths. Use a temp directory for any output.
+- Each new module gets a demo in the same change that adds it.
+
 ## Testing
 
 Prioritize tests for:

@@ -133,3 +133,24 @@ def run_batch(
     answers = AnswersFile(team=TEAM_NAME, answers=[entries[q.id] for q in questions])
     write_answers_atomic(output_path, answers)
     return answers
+
+
+if __name__ == "__main__":
+    # Demo: run one question through the agents with the real endpoint, into a temp file.
+    import tempfile
+
+    from causa_nostra.agents.stages import build_agent_stages
+    from causa_nostra.graph.store import GraphStore
+    from causa_nostra.llm.client import LLMClient, LLMSettings
+    from causa_nostra.pipeline.questions import load_questions
+
+    store = GraphStore.from_json("causal_graph.json")
+    questions = load_questions("questions.yaml")[:1]
+    client = LLMClient(LLMSettings.from_env())
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "answers.json"
+            answers = run_batch(questions, store, build_agent_stages(store, client), out)
+            print(f"wrote {len(answers.answers)} answer(s) to a temp file; statuses: {[a.status for a in answers.answers]}")
+    finally:
+        client.close()

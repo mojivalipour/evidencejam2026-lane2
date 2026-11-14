@@ -29,6 +29,10 @@ class LLMConfigError(RuntimeError):
     pass
 
 
+class LLMResponseError(RuntimeError):
+    """The endpoint answered but the reply has no usable content."""
+
+
 @dataclass(frozen=True)
 class LLMSettings:
     url: str
@@ -55,10 +59,12 @@ class LLMClient:
         self,
         settings: LLMSettings,
         *,
-        timeout: float = 120.0,
+        timeout: float = 60.0,
+        retries: int = 1,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._model = settings.model
+        self._retries = retries
         self._http = httpx.Client(
             base_url=settings.url.rstrip("/"),
             headers={"Authorization": f"Bearer {settings.api_key}"},
@@ -72,33 +78,59 @@ class LLMClient:
         *,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        thinking: bool = True,
     ) -> ChatResult:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
             "temperature": temperature,
+            # Qwen3 reasoning can be switched off for short structured tasks (vLLM chat template flag).
+            "chat_template_kwargs": {"enable_thinking": thinking},
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
 
-        response = self._http.post("/chat/completions", json=payload)
-        response.raise_for_status()
-        data = response.json()
+        data = self._post_with_retry(payload)
 
         usage = data.get("usage") or {}
+        choice = data["choices"][0]
+        content = (choice.get("message") or {}).get("content")
         log.info(
-            "llm usage prompt_tokens=%s completion_tokens=%s",
+            "llm usage prompt_tokens=%s completion_tokens=%s finish_reason=%s",
             usage.get("prompt_tokens"),
             usage.get("completion_tokens"),
+            choice.get("finish_reason"),
         )
+        if not content:
+            # Reasoning models can spend the whole max_tokens budget on reasoning_content.
+            raise LLMResponseError(
+                f"empty content (finish_reason={choice.get('finish_reason')}); raise max_tokens"
+            )
         return ChatResult(
-            text=data["choices"][0]["message"]["content"],
+            text=content,
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
         )
 
     def close(self) -> None:
         self._http.close()
+
+    def _post_with_retry(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST once, plus `retries` more times on timeouts, connection errors, or 5xx replies."""
+        attempts = self._retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._http.post("/chat/completions", json=payload)
+                if response.status_code >= 500 and attempt < attempts:
+                    log.warning("llm server error %s; retrying (%d/%d)", response.status_code, attempt, attempts)
+                    continue
+                response.raise_for_status()
+                return response.json()
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt == attempts:
+                    raise
+                log.warning("llm transport error %s; retrying (%d/%d)", type(exc).__name__, attempt, attempts)
+        raise AssertionError("unreachable")
 
 
 if __name__ == "__main__":
