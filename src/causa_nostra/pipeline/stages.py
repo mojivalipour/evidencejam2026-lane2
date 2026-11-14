@@ -1,7 +1,8 @@
 """Stage interfaces. Each stage is injectable, so it can be tested or replaced alone.
 
-Implementations that call Qwen belong in their own modules and are wired in
-`build_default_stages`. Until they exist, that function raises.
+Only `build_placeholder_stages` exists today. It is a no-LLM placeholder. Qwen-backed
+implementations belong in their own modules and should be wired in a future
+builder once they exist.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from causa_nostra.answers.models import AnswerEntry
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.types import Question, QuestionFrame, Verification
-from causa_nostra.retrieval.bm25 import BM25Index
+from causa_nostra.retrieval.pipeline import RetrievalPipeline
 from causa_nostra.retrieval.records import EvidenceRecord, build_records
 
 # Understand: question -> frame
@@ -52,8 +53,7 @@ def build_placeholder_stages(store: GraphStore, top_k: int = 20) -> Stages:
     (confidence 0.0) and says that reasoning is not implemented yet.
     """
     records_all = build_records(store)
-    by_id = {r.edge_id: r for r in records_all}
-    index = BM25Index(records_all)
+    retrieval = RetrievalPipeline(records_all, top_k=top_k)
 
     def understand(question: Question) -> QuestionFrame:
         return QuestionFrame(
@@ -64,8 +64,7 @@ def build_placeholder_stages(store: GraphStore, top_k: int = 20) -> Stages:
         )
 
     def retrieve(frame: QuestionFrame) -> list[EvidenceRecord]:
-        query = " ".join([frame.intervention, frame.outcome, *frame.search_terms]).strip()
-        return [by_id[hit.edge_id] for hit in index.search(query, top_k=top_k)]
+        return retrieval.retrieve(frame)
 
     def reason(
         question: Question,
