@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-Judgement = str  # "pass" | "irrelevant" | "fail"
+Judgement = str  # "pass" | "partial" | "fail"
 
-# Points per judgement. Weighted sums lie in [-1, 1]: a fail costs its full weight.
-JUDGEMENT_VALUE: dict[str, float] = {"pass": 1.0, "irrelevant": 0.0, "fail": -1.0}
+JUDGEMENT_VALUE: dict[str, float] = {"pass": 1.0, "partial": 0.5, "fail": 0.0}
 
 ANSWERED_WEIGHTS: dict[str, float] = {
     "evidence_match": 0.30,
@@ -43,11 +42,11 @@ def weighted_score(judgements: Mapping[str, Judgement], weights: Mapping[str, fl
 
 
 if __name__ == "__main__":
-    # Demo: score an answered entry where the citations pass and the search is irrelevant.
+    # Demo: score an answered entry where the citations pass and the search is partial.
     judgements = {
         "evidence_match": "pass",
         "direction_and_causal_language": "pass",
         "citation_support": "pass",
-        "search_coverage": "irrelevant",
+        "search_coverage": "partial",
     }
     print(f"answered score: {weighted_score(judgements, ANSWERED_WEIGHTS)}")

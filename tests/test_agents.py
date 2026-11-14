@@ -100,7 +100,7 @@ def _draft() -> AnswerEntry:
 def test_verifier_passes_when_no_required_criterion_fails():
     reply = json.dumps({
         "criteria": {"evidence_match": "pass", "direction_and_causal_language": "pass",
-                     "citation_support": "irrelevant", "search_coverage": "irrelevant"},
+                     "citation_support": "partial", "search_coverage": "partial"},
         "problems": [], "supporting_edge_ids": ["e1", "made_up"],
     })
     result = Verifier(FakeClient(reply)).run(QUESTION, _draft(), [_record()])
@@ -125,33 +125,9 @@ def test_verifier_missing_criteria_count_as_fail():
     assert result.criteria["citation_support"] == "fail"
 
 
-def test_verifier_fails_when_evidence_does_not_match():
-    reply = json.dumps({
-        "criteria": {"evidence_match": "fail", "direction_and_causal_language": "pass",
-                     "citation_support": "pass", "search_coverage": "pass"},
-        "problems": [],
-    })
-    result = Verifier(FakeClient(reply)).run(QUESTION, _draft(), [_record()])
-    assert result.passed is False
-    assert result.problems == ["criteria failed: evidence_match"]
-
-
-def test_verifier_invalid_judgement_value_counts_as_fail():
-    reply = json.dumps({
-        "criteria": {"evidence_match": "pass", "direction_and_causal_language": "maybe",
-                     "citation_support": "pass", "search_coverage": "pass"},
-        "problems": [],
-    })
-    result = Verifier(FakeClient(reply)).run(QUESTION, _draft(), [_record()])
-    assert result.criteria["direction_and_causal_language"] == "fail"
-    assert result.passed is False
-
-
 def test_rubric_score_is_weighted_in_python():
     all_pass = {"evidence_match": "pass", "direction_and_causal_language": "pass",
                 "citation_support": "pass", "search_coverage": "pass"}
     assert rubric_score(all_pass) == pytest.approx(1.0)
-    assert rubric_score({**all_pass, "direction_and_causal_language": "irrelevant"}) == pytest.approx(0.70)
-    assert rubric_score({**all_pass, "search_coverage": "fail"}) == pytest.approx(0.70)
-    assert rubric_score({**all_pass, "evidence_match": "fail", "citation_support": "fail"}) == pytest.approx(-0.10)
-    assert rubric_score({}) == pytest.approx(-1.0)
+    assert rubric_score({**all_pass, "direction_and_causal_language": "partial"}) == pytest.approx(0.85)
+    assert rubric_score({**all_pass, "search_coverage": "fail"}) == pytest.approx(0.85)

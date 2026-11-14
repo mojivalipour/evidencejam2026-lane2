@@ -1,6 +1,6 @@
 """Agent 3: verification.
 
-The LLM returns a per-criterion judgement (pass / irrelevant / fail), short problem
+The LLM returns a per-criterion judgement (pass / partial / fail), short problem
 notes, and supporting edge IDs. The pass/fail decision and the weighted score are
 computed here in Python, not by the model.
 
@@ -12,30 +12,36 @@ from __future__ import annotations
 
 from causa_nostra.agents.base import Agent, ChatClient
 from causa_nostra.answers.models import AnswerEntry
-from causa_nostra.answers.rubric import ANSWERED_WEIGHTS, JUDGEMENT_VALUE, weighted_score
 from causa_nostra.pipeline.types import Question, Verification
 from causa_nostra.retrieval.records import EvidenceRecord
 
+CRITERIA_WEIGHTS: dict[str, float] = {
+    "evidence_match": 0.30,
+    "direction_and_causal_language": 0.30,
+    "citation_support": 0.25,
+    "search_coverage": 0.15,
+}
 # Criteria whose failure requires correction regardless of other scores.
 REQUIRED_CRITERIA = ("direction_and_causal_language", "citation_support")
+VALID_JUDGEMENTS = {"pass", "partial", "fail"}
+POINTS = {"pass": 1.0, "partial": 0.5, "fail": 0.0}
 
 SYSTEM_PROMPT = """You verify a draft answer against the evidence records it cites.
-Judge each criterion as "pass", "irrelevant", or "fail". Use "irrelevant" when the cited records do not bear on that criterion:
+Judge each criterion as "pass", "partial", or "fail":
 - "evidence_match": the cited records match both the intervention and the outcome, and the requested context.
 - "direction_and_causal_language": the direction, null findings, and causal wording match the records.
 - "citation_support": every factual claim in the answer is supported by a cited record.
 - "search_coverage": the records are plausibly enough to answer the question, or a no_evidence answer is justified.
 
 Return ONLY a JSON object with these keys:
-- "criteria": object mapping each of the four criterion names above to "pass", "irrelevant", or "fail".
+- "criteria": object mapping each of the four criterion names above to "pass", "partial", or "fail".
 - "problems": list of short strings describing each concrete problem. Empty list if none.
 - "supporting_edge_ids": list of edge_ids from the records that bear on the question."""
 
 
 def rubric_score(criteria: dict[str, str]) -> float:
-    """Weighted score in [-1, 1] from per-criterion judgements. Missing criteria count as fail."""
-    judgements = {name: criteria.get(name, "fail") for name in ANSWERED_WEIGHTS}
-    return weighted_score(judgements, ANSWERED_WEIGHTS)
+    """Weighted score in [0, 1] from per-criterion judgements. Missing criteria score 0."""
+    return sum(weight * POINTS.get(criteria.get(name, "fail"), 0.0) for name, weight in CRITERIA_WEIGHTS.items())
 
 
 def _judgements(raw: object) -> dict[str, str]:
@@ -44,7 +50,7 @@ def _judgements(raw: object) -> dict[str, str]:
     return {
         name: str(value).lower()
         for name, value in raw.items()
-        if name in ANSWERED_WEIGHTS and str(value).lower() in JUDGEMENT_VALUE
+        if name in CRITERIA_WEIGHTS and str(value).lower() in VALID_JUDGEMENTS
     }
 
 
@@ -74,7 +80,7 @@ class Verifier(Agent):
         supporting = [e for e in raw_supporting if isinstance(e, str) and e in by_id] if isinstance(raw_supporting, list) else []
 
         # Missing or invalid judgements count as fail, so the verifier cannot pass by omission.
-        for name in ANSWERED_WEIGHTS:
+        for name in CRITERIA_WEIGHTS:
             criteria.setdefault(name, "fail")
         # Any failed criterion that requires correction, or failed evidence match, fails the draft.
         failed = [name for name, value in criteria.items() if value == "fail"]
