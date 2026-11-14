@@ -2,8 +2,8 @@
 
 import pytest
 
-from causa_nostra.camo.checks import check_edge
-from causa_nostra.camo.semantics import (
+from causa_nostra.camo_rules.checks import check_edge
+from causa_nostra.camo_rules.semantics import (
     NEG,
     POS,
     UnknownVocabularyError,

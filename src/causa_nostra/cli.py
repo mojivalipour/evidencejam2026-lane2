@@ -12,7 +12,8 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-from causa_nostra.camo.checks import check_graph
+from causa_nostra.camo_rules.checks import check_graph
+from causa_nostra.camo_rules.schema import validate_graph_file
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.questions import load_questions
 from causa_nostra.pipeline.run import run_pipeline
@@ -24,13 +25,19 @@ DEFAULT_GRAPH = "causal_graph.json"
 def _cmd_check_graph(args: argparse.Namespace) -> int:
     store = GraphStore.from_json(args.graph)
     print(f"nodes={len(store.graph.nodes)} edges={len(store.graph.edges)}")
+    schema_problems = validate_graph_file(args.graph)
+    if schema_problems:
+        print(f"LinkML schema problems: {len(schema_problems)}")
+        for message in schema_problems[:20]:
+            print(f"  {message}")
+    else:
+        print("LinkML schema: valid")
     issues = check_graph(store)
     if not issues:
         print("no invariant violations")
-        return 0
     for rule, count in Counter(i.rule for i in issues).most_common():
         print(f"{rule}: {count}")
-    return 1
+    return 1 if (schema_problems or issues) else 0
 
 
 def _cmd_run(args: argparse.Namespace) -> int:

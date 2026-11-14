@@ -18,7 +18,7 @@ The supplied graph is the source of truth for this competition. Do not replace i
 ## Project References
 
 - `causal_graph.json` / `causal_graph.yaml`: supplied evidence.
-- `schema/causalmosaic.yaml`: authoritative definitions of graph fields.
+- `schema/causalmosaic.yaml`: authoritative CAMO definitions of graph fields. It is a LinkML schema (`imports: linkml:types`, `classes`, `enums`, `default_prefix: causal_mosaic`).
 - `questions.yaml`: practice questions without reference answers.
 - `documents/PROBLEM.md`: project scope.
 - `documents/PROPOSAL.md`: proposed implementation.
@@ -28,10 +28,11 @@ Read schema descriptions before implementing interpretation rules. UI examples a
 
 ## Technology and Design
 
+- **LinkML:** the CAMO schema (`schema/causalmosaic.yaml`) is the single source of truth for graph structure, enums, and constraints. Use LinkML tooling (`linkml-validate`, and `gen-pydantic` where it helps) rather than re-declaring graph fields by hand. Pin the LinkML version in `pyproject.toml` and `uv.lock`.
 - **Haystack:** retrieval and workflow orchestration.
 - **Qwen:** question interpretation, evidence reasoning, and verification.
-- **Pydantic:** structured intermediate results and final output validation.
-- **Small Python CAMO module:** graph lookup, provenance, and deterministic checks.
+- **Pydantic:** structured pipeline intermediates and the final output contract. Graph-record models should be generated from, or validated against, the LinkML schema.
+- **CAMO rules layer (`src/causa_nostra/camo_rules/`):** graph lookup, provenance, and deterministic invariant checks. Interpretation logic (direction, qualifiers, null handling) stays in hand-written, tested Python.
 
 Keep components modular and independently testable. Prefer existing permissively licensed libraries compatible with the MIT repository, preserving required notices.
 
@@ -87,7 +88,7 @@ Use deterministic Python checks for:
 - Citation IDs exist.
 - Required fields and enum values are valid.
 - Output fields are consistent with the answer status.
-- Schema-defined invariants, where applicable.
+- Schema-defined invariants: validate the supplied graph and any graph-shaped data against the LinkML schema with `linkml-validate`. Schema validation runs in the pipeline, not only in tests.
 
 Use a verifier agent for semantic checks. Provide the question, draft answer, evidence records, and search log.
 
@@ -238,6 +239,8 @@ Prioritize tests for:
 - Invalid citations and malformed outputs.
 - Search expansion that discovers previously missed evidence.
 - A complete run through the required command.
+
+Add tests that confirm the supplied `causal_graph.json` validates against `schema/causalmosaic.yaml`, and that deliberately invalid graph cases fail validation.
 
 Use explicit graph cases for deterministic checks. Do not treat LLM-generated labels as verified ground truth.
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from causa_nostra.camo.semantics import variable_sign
+from causa_nostra.camo_rules.semantics import variable_sign
 from causa_nostra.graph.models import Edge
 from causa_nostra.graph.store import GraphStore
 
