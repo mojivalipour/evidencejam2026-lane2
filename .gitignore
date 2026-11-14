@@ -42,3 +42,6 @@ htmlcov/
 .AppleDouble
 .LSOverride
 
+
+# Generated run outputs
+outputs/
