@@ -41,6 +41,10 @@ uv run --locked causa-nostra check-graph   # LinkML schema and graph invariants
 uv run --locked pytest                     # unit tests
 ```
 
+Graph loading logs warnings for missing essential node/edge fields and unknown
+subject/object node IDs, but continues loading so the graph can be inspected.
+`check-graph` reports these warnings and exits with a non-zero status.
+
 ## Layout
 
 - `src/causa_nostra/camo_rules/`: CAMO interpretation rules and graph invariants.

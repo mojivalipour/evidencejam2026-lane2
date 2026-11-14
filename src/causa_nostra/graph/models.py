@@ -24,6 +24,7 @@ class Node(_Record):
     name: str = ""
     entity_term: str | None = None
     entity_type: str | None = None
+    measured_attribute: str | None = None
     state_or_change_qualifier: str | None = None
     embedding_text: str = ""
     applied_to: Any = None

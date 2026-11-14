@@ -37,7 +37,12 @@ def _cmd_check_graph(args: argparse.Namespace) -> int:
         print("no invariant violations")
     for rule, count in Counter(i.rule for i in issues).most_common():
         print(f"{rule}: {count}")
-    return 1 if (schema_problems or issues) else 0
+    if store.validation_warnings:
+        print(
+            f"load-time validation warnings: {len(store.validation_warnings)} "
+            "(details logged above)"
+        )
+    return 1 if (schema_problems or issues or store.validation_warnings) else 0
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
