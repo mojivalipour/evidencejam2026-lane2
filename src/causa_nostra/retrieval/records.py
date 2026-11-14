@@ -1,17 +1,47 @@
 """Readable evidence records: one per edge, carrying everything a reader or LLM needs.
 
-The `text` field is what BM25 indexes. It includes node labels and embedding
-text, the predicate and claim strength, null status, context, and the source
-sentence, so that search matches on the same content a reviewer would read.
+`text` is what the reasoner reads and what the broad BM25 search indexes. It
+holds the node labels, the predicate and claim strength, the reported outcome
+direction, the context and the source sentence.
+
+Ontology codes that a node gives without a label (e.g. `applied to: wd:Q123`)
+are given the label the graph uses for the same code elsewhere, so that keyword
+search can match them.
 """
 
 from __future__ import annotations
+
+import re
+from collections import Counter, defaultdict
 
 from pydantic import BaseModel
 
 from causa_nostra.camo_rules.semantics import variable_sign
 from causa_nostra.graph.models import Edge
 from causa_nostra.graph.store import GraphStore
+
+_CURIE = r"(?:wd|ENVO|PATO|CHEBI|GO|NCBITaxon):[A-Za-z0-9_]+"
+_LABELLED_CURIE = re.compile(rf"([^|:()]+?) \(({_CURIE})\)")
+_BARE_CURIE = re.compile(rf"(?<![(\w])({_CURIE})(?![\w)])")
+
+# Outcome direction as this graph records it: the object node's qualifier holds
+# the reported outcome, whatever the predicate (also for prevents / disrupts and
+# for associated_with / correlated_with). Qualifiers not listed are "unclear".
+_OUTCOME_DIRECTION = {"increased": "increase", "decreased": "decrease", "unchanged": "stable"}
+# A subject with one of these qualifiers is a reduction or removal of the driver,
+# so the outcome direction describes what happens when the driver goes DOWN.
+_REDUCTION_QUALIFIERS = frozenset({"decreased", "absent", "removed", "terminated", "interrupted", "aborted"})
+
+
+def outcome_direction(negated: bool, object_qualifier: str | None) -> str:
+    """What an edge reports about its outcome node.
+
+    "no_effect" for a null result, otherwise "increase", "decrease", "stable"
+    (reported as unchanged) or "unclear" (no directional qualifier).
+    """
+    if negated:
+        return "no_effect"
+    return _OUTCOME_DIRECTION.get(object_qualifier, "unclear")
 
 
 class EvidenceRecord(BaseModel):
@@ -25,7 +55,9 @@ class EvidenceRecord(BaseModel):
     predicate: str
     causal_language: str
     negated: bool
-    relation_sign: str | None  # "positive" | "negative" | None
+    relation_sign: str | None  # "positive" | "negative" | None (schema sign arithmetic)
+    outcome_direction: str = "unclear"  # "increase" | "decrease" | "no_effect" | "stable" | "unclear"
+    subject_is_reduction: bool = False
     source_document: str | None
     original_sentence: str
     ecosystem_context: str | None
@@ -33,27 +65,47 @@ class EvidenceRecord(BaseModel):
     text: str
 
 
-def _label(node_label: str, fallback: str) -> str:
-    return node_label or fallback
+def curie_labels(store: GraphStore) -> dict[str, str]:
+    """Map each ontology code to the label the graph most often writes beside it."""
+    seen: dict[str, Counter[str]] = defaultdict(Counter)
+    for node in store.nodes():
+        for label, curie in _LABELLED_CURIE.findall(node.embedding_text):
+            seen[curie][label.strip()] += 1
+    return {curie: counts.most_common(1)[0][0] for curie, counts in seen.items()}
 
 
-def build_record(edge: Edge, store: GraphStore) -> EvidenceRecord:
+def label_curies(text: str, labels: dict[str, str]) -> str:
+    """Rewrite bare codes as `label (code)` where the label is known."""
+
+    def expand(match: re.Match[str]) -> str:
+        curie = match.group(1)
+        return f"{labels[curie]} ({curie})" if curie in labels else curie
+
+    return _BARE_CURIE.sub(expand, text)
+
+
+def build_record(edge: Edge, store: GraphStore, labels: dict[str, str] | None = None) -> EvidenceRecord:
+    labels = labels or {}
     subject = store.node(edge.subject)
     obj = store.node(edge.object)
-    subject_label = _label(subject.embedding_text, subject.name)
-    object_label = _label(obj.embedding_text, obj.name)
+    subject_label = label_curies(subject.embedding_text or subject.name, labels)
+    object_label = label_curies(obj.embedding_text or obj.name, labels)
 
     sign = variable_sign(edge, store)
-    sign_name = None if sign is None else sign.name.lower()
+    direction = outcome_direction(edge.negated, obj.state_or_change_qualifier)
+    reduction = subject.state_or_change_qualifier in _REDUCTION_QUALIFIERS
 
     null_tag = " NULL RESULT (no relationship found)" if edge.negated else ""
+    context = (edge.ecosystem_context or "").replace("_", " ")
     text = " | ".join(
         part
         for part in (
             f"subject: {subject_label}",
+            "note: subject is a reduction or removal of the driver" if reduction else "",
             f"predicate: {edge.predicate} [{edge.causal_language}]{null_tag}",
             f"object: {object_label}",
-            f"context: {edge.ecosystem_context}" if edge.ecosystem_context else "",
+            f"outcome direction: {direction}",
+            f"context: {context}" if context else "",
             f"sentence: {edge.original_sentence}" if edge.original_sentence else "",
         )
         if part
@@ -70,7 +122,9 @@ def build_record(edge: Edge, store: GraphStore) -> EvidenceRecord:
         predicate=edge.predicate,
         causal_language=edge.causal_language,
         negated=edge.negated,
-        relation_sign=sign_name,
+        relation_sign=None if sign is None else sign.name.lower(),
+        outcome_direction=direction,
+        subject_is_reduction=reduction,
         source_document=edge.source_document,
         original_sentence=edge.original_sentence,
         ecosystem_context=edge.ecosystem_context,
@@ -80,11 +134,12 @@ def build_record(edge: Edge, store: GraphStore) -> EvidenceRecord:
 
 
 def build_records(store: GraphStore) -> list[EvidenceRecord]:
-    return [build_record(edge, store) for edge in store.edges()]
+    labels = curie_labels(store)
+    return [build_record(edge, store, labels) for edge in store.edges()]
 
 
 if __name__ == "__main__":
-    # Demo: print the indexed text of the first evidence record.
+    # Demo: print the first evidence record.
     store = GraphStore.from_json("causal_graph.json")
     record = build_records(store)[0]
     print(record.model_dump_json(indent=2))
