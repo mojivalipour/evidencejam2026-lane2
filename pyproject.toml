@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "causa-nostra"
+version = "0.1.0"
+description = "Evidence-grounded reasoning over the CAMO causal graph (Evidence Jam 2026, Lane 2)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "haystack-ai>=2.0,<3",
+    "pydantic>=2.6,<3",
+    "pyyaml>=6.0,<7",
+    "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+# Development tools live in a PEP 735 group so `uv sync` installs them by default.
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[project.scripts]
+causa-nostra = "causa_nostra.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
