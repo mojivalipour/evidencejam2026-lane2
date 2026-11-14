@@ -19,17 +19,36 @@ from causa_nostra.retrieval.records import EvidenceRecord
 # Criteria whose failure requires correction regardless of other scores.
 REQUIRED_CRITERIA = ("direction_and_causal_language", "citation_support")
 
-SYSTEM_PROMPT = """You verify a draft answer against the evidence records it cites.
-Judge each criterion as "pass", "partial", or "fail":
-- "evidence_match": the cited records match both the intervention and the outcome, and the requested context.
-- "direction_and_causal_language": the direction, null findings, and causal wording match the records.
-- "citation_support": every factual claim in the answer is supported by a cited record.
-- "search_coverage": the records are plausibly enough to answer the question, or a no_evidence answer is justified.
+# Prompt wording for each rubric criterion. Names and order come from ANSWERED_WEIGHTS;
+# build_system_prompt() fails if a rubric criterion has no description here.
+CRITERION_GUIDE: dict[str, str] = {
+    "evidence_match": "the cited records match both the intervention and the outcome, and the requested context.",
+    "direction_and_causal_language": "the direction, null findings, and causal wording match the records.",
+    "citation_support": "every factual claim in the answer is supported by a cited record.",
+    "search_coverage": "the records are plausibly enough to answer the question, or a no_evidence answer is justified.",
+}
 
-Return ONLY a JSON object with these keys:
-- "criteria": object mapping each of the four criterion names above to "pass", "partial", or "fail".
-- "problems": list of short strings describing each concrete problem. Empty list if none.
-- "supporting_edge_ids": list of edge_ids from the records that bear on the question."""
+
+def build_system_prompt() -> str:
+    """Build the verifier prompt from the rubric's criteria and judgement values."""
+    missing = set(ANSWERED_WEIGHTS) - set(CRITERION_GUIDE)
+    if missing:
+        raise ValueError(f"no prompt description for rubric criteria: {sorted(missing)}")
+    judgement_choices = ", ".join(f'"{j}"' for j in JUDGEMENT_VALUE)
+    criteria_lines = "\n".join(f'- "{name}": {CRITERION_GUIDE[name]}' for name in ANSWERED_WEIGHTS)
+    return (
+        "You verify a draft answer against the evidence records it cites.\n"
+        f"Judge each criterion as {judgement_choices}:\n"
+        f"{criteria_lines}\n\n"
+        "Return ONLY a JSON object with these keys:\n"
+        f'- "criteria": object mapping each of the {len(ANSWERED_WEIGHTS)} criterion names above '
+        f"to {judgement_choices}.\n"
+        '- "problems": list of short strings describing each concrete problem. Empty list if none.\n'
+        '- "supporting_edge_ids": list of edge_ids from the records that bear on the question.'
+    )
+
+
+SYSTEM_PROMPT = build_system_prompt()
 
 
 def rubric_score(criteria: dict[str, str]) -> float:
