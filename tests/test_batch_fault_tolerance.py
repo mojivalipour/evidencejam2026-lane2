@@ -26,7 +26,7 @@ def _stages(reason) -> Stages:
         understand=lambda q: QuestionFrame(question_id=q.id, intervention="S", outcome="O"),
         retrieve=lambda frame: [],
         reason=reason,
-        verify=lambda q, d, r: Verification(passed=True),
+        verify=lambda q, d, r: Verification(score=0.75),
     )
 
 
@@ -58,6 +58,7 @@ def test_crash_in_one_question_does_not_drop_others(tmp_path: Path):
     assert [a.id for a in answers.answers] == ["Q1", "Q2", "Q3"]
     by_id = {a.id: a for a in answers.answers}
     assert by_id["Q1"].status == "answered"
+    assert by_id["Q1"].confidence == 0.75
     assert by_id["Q2"].status == "no_evidence"
     assert "RuntimeError" in by_id["Q2"].answer
     assert by_id["Q3"].status == "answered"
@@ -76,25 +77,24 @@ def test_final_file_on_disk_is_complete_and_parseable(tmp_path: Path):
     assert not list(tmp_path.glob("answers.json.*.tmp"))
 
 
-def test_unknown_citation_is_dropped_and_valid_one_kept(tmp_path: Path):
+def test_unknown_citation_is_preserved_and_reported(tmp_path: Path):
     def reason(question, frame, records, feedback):
         return _answered(question, frame, records, feedback, edges=("e1", "made_up"))
 
-    # Verification in answer_question rejects the bad draft first, so the revision
-    # must repair it. Here we test sanitize_entry directly on a draft with a bad citation.
     draft = _answered(QUESTIONS[0], None, [], [], edges=("e1", "made_up"))
     cleaned, warnings = sanitize_entry(draft, _store(), tmp_path)
-    assert cleaned.edge_ids == ["e1"]
+    assert cleaned.edge_ids == ["e1", "made_up"]
     assert cleaned.status == "answered"
     assert any("made_up" in w for w in warnings)
 
 
-def test_answered_with_only_invalid_citations_becomes_fallback(tmp_path: Path):
+def test_answered_with_only_invalid_citations_is_not_replaced(tmp_path: Path):
     draft = _answered(QUESTIONS[0], None, [], [], edges=("made_up",))
-    cleaned, _ = sanitize_entry(draft, _store(), tmp_path)
-    assert cleaned.status == "no_evidence"
-    assert cleaned.edge_ids == []
-    assert cleaned.searched_for
+    cleaned, warnings = sanitize_entry(draft, _store(), tmp_path)
+    assert cleaned.status == "answered"
+    assert cleaned.answer == draft.answer
+    assert cleaned.edge_ids == ["made_up"]
+    assert any("made_up" in warning for warning in warnings)
 
 
 def test_invalid_extra_is_dropped(tmp_path: Path):

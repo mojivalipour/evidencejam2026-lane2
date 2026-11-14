@@ -25,7 +25,11 @@ class AnswerEntry(BaseModel):
     status: Status
     answer: str = Field(min_length=1)
     direction: Direction | None = None
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Rubric-derived verification score, not a calibrated probability.",
+    )
     certainty: Certainty | None = None
     edge_ids: list[str] = Field(default_factory=list)
     searched_for: str | None = None

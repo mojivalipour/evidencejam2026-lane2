@@ -1,17 +1,32 @@
-"""Deterministic checks that tie an answer file to the graph and question set.
+"""Validate answer-file fields and run deterministic pipeline consistency checks.
 
-These run after every LLM stage. They do not judge meaning; that is the
-verifier's job. Problems are returned as strings so they can be logged in the
-evidence trace.
+Answer fields are validated against the Pydantic output contract. Pipeline
+checks additionally verify citations, question coverage, and extra-file paths.
 """
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Iterable
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from causa_nostra.answers.models import AnswerEntry, AnswersFile
 from causa_nostra.graph.store import GraphStore
+
+
+def validate_answer_file(path: Path) -> list[str]:
+    """Return answer-field validation errors from an answers.json file."""
+    content = path.read_text(encoding="utf-8")
+    try:
+        AnswersFile.model_validate_json(content)
+    except ValidationError as exc:
+        return [
+            f"{'.'.join(str(part) for part in error['loc']) or '<file>'}: {error['msg']}"
+            for error in exc.errors(include_input=False)
+        ]
+    return []
 
 
 def check_entry(entry: AnswerEntry, store: GraphStore) -> list[str]:
@@ -55,22 +70,14 @@ def check_file(
 
 
 if __name__ == "__main__":
-    # Demo: a bad citation and a missing question are both reported.
-    from causa_nostra.graph.store import GraphStore
+    parser = argparse.ArgumentParser(description="Validate answer fields in an answers.json file.")
+    parser.add_argument("answers_file", nargs="?", type=Path, default=Path("answers.json"))
+    args = parser.parse_args()
 
-    store = GraphStore.from_json("causal_graph.json")
-    sample = AnswersFile(
-        answers=[
-            AnswerEntry(
-                id="q1",
-                status="answered",
-                answer="Demo.",
-                direction="unclear",
-                confidence=0.4,
-                certainty="very_low",
-                edge_ids=["camo:edge_does_not_exist"],
-            )
-        ]
-    )
-    for problem in check_file(sample, store, ["q1", "q2"]):
-        print(problem)
+    problems = validate_answer_file(args.answers_file)
+    if problems:
+        print(f"{args.answers_file}: invalid answer file")
+        for problem in problems:
+            print(problem)
+        raise SystemExit(1)
+    print(f"{args.answers_file}: answer fields are valid")
