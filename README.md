@@ -149,14 +149,12 @@ The question-processing, reasoning, and verification stages are connected to the
 
 <!-- Add the final architecture image or Mermaid diagram here. -->
 
-
-
 ## Contributors
 
 | Name | Title |
 | --- | --- |
 | Andrii Kramarenko | Biologist/Ecologist, Lab Tech|
-| Antonina | Data Scientist |
+| Antonina Rudakova | Data Scientist |
 | Mojtaba Valipour, PhD | AI/ML Research Engineer |
 | Panos Vlachos | PhD Student in Civil Engineering and Environmental Science |
 
