@@ -8,6 +8,8 @@ revision.
 
 from __future__ import annotations
 
+import re
+
 from causa_nostra.agents.base import Agent, ChatClient
 from causa_nostra.answers.models import AnswerEntry
 from causa_nostra.pipeline.types import Question, QuestionFrame
@@ -41,13 +43,18 @@ def format_records(records: list[EvidenceRecord], limit: int) -> str:
     return "\n".join(lines) if lines else "(no records retrieved)"
 
 
+def _mentions(answer: str, edge_id: str) -> bool:
+    """True when `edge_id` appears as a whole token (so `e1` does not match inside `e10`)."""
+    return re.search(rf"(?<![\w:.-]){re.escape(edge_id)}(?![\w:.-])", answer) is not None
+
+
 def with_citations(answer: str, edge_ids: list[str]) -> str:
     """Append any cited edge ID that the answer text does not already name.
 
     Deterministic, so every answered entry shows its citations even when the
     model leaves them out of the sentence.
     """
-    missing = [edge_id for edge_id in edge_ids if edge_id not in answer]
+    missing = [edge_id for edge_id in edge_ids if not _mentions(answer, edge_id)]
     if not missing:
         return answer
     return f"{answer.rstrip()} [{'; '.join(missing)}]"

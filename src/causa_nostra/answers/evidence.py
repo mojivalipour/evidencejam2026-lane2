@@ -7,14 +7,12 @@ so a reader can trace every claim to a graph edge and its source text.
 from __future__ import annotations
 
 import html
-import re
 from pathlib import Path
+from urllib.parse import quote
 
 from causa_nostra.answers.models import AnswerEntry
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.retrieval.records import EvidenceRecord, build_record, curie_labels
-
-_SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 def render_evidence_html(entry: AnswerEntry, records: list[EvidenceRecord]) -> str:
@@ -26,7 +24,7 @@ def render_evidence_html(entry: AnswerEntry, records: list[EvidenceRecord]) -> s
             "<tr>"
             f"<td><code>{esc(record.edge_id)}</code></td>"
             f"<td>{esc(record.subject_label)}</td>"
-            f"<td>{esc(record.predicate)}</td>"
+            f"<td>{esc(('NULL RESULT: ' if record.negated else '') + record.predicate)}</td>"
             f"<td>{esc(record.object_label)}</td>"
             f"<td>{esc(record.relation_sign or '')}</td>"
             f"<td>{esc(record.source_document or '')}</td>"
@@ -66,7 +64,7 @@ def write_evidence(entry: AnswerEntry, store: GraphStore, out_dir: str | Path, r
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    path = out / f"{_SAFE_NAME.sub('_', entry.id)}_evidence.html"
+    path = out / f"{quote(entry.id, safe='')}_evidence.html"
     path.write_text(render_evidence_html(entry, records), encoding="utf-8")
     try:
         return str(path.resolve().relative_to(repo_root.resolve()))

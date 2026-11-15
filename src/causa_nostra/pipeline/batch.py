@@ -152,6 +152,9 @@ def run_batch(
     entries: dict[str, AnswerEntry] = {}
     warnings: list[str] = []
     failed: list[str] = []
+    # One evidence directory per output file, so two batches never overwrite each other's pages.
+    output = Path(output_path)
+    evidence_dir = output.parent / f"{output.stem}_evidence"
 
     for question in questions:
         try:
@@ -161,7 +164,7 @@ def run_batch(
             log.exception("question %s failed", question.id)
             failed.append(question.id)
             entry = fallback_entry(question.id, f"{type(exc).__name__}: {exc}")
-        entry = attach_evidence(entry, store, Path(output_path).parent / "evidence", repo_root)
+        entry = attach_evidence(entry, store, evidence_dir, repo_root)
         entries[question.id] = entry
 
         partial = AnswersFile(answers=[entries[q.id] for q in questions if q.id in entries])
