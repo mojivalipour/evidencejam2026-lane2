@@ -61,6 +61,9 @@ def answer_question(
     stage_debug(qid, "retrieve", "output", records)
 
     feedback: list[str] = []
+    # Last answered draft that passed the deterministic checks but failed verification.
+    # Used only if no revision is accepted: its citations are kept and its confidence is lowered.
+    unverified: AnswerEntry | None = None
     for attempt in range(max_revisions + 1):
         stage_info(qid, "reason", "attempt %d, feedback items: %d", attempt + 1, len(feedback))
         stage_debug(qid, "reason", "input feedback", feedback)
@@ -87,11 +90,24 @@ def answer_question(
                     draft = draft.model_copy(update={"confidence": verification.score})
                 stage_info(qid, "done", "accepted after %d attempt(s)", attempt + 1)
                 return draft
+            if draft.status == "answered" and draft.edge_ids:
+                unverified = draft.model_copy(update={"confidence": verification.score or 0.0})
             problems = _verification_feedback(verification)
         if attempt == max_revisions:
             break
         feedback = problems
 
+    if unverified is not None:
+        stage_info(
+            qid,
+            "done",
+            "unverified after %d attempt(s): kept citations %s, confidence %.2f; problems: %s",
+            max_revisions + 1,
+            ", ".join(unverified.edge_ids),
+            unverified.confidence,
+            "; ".join(problems),
+        )
+        return unverified
     stage_info(qid, "done", "rejected after %d attempt(s)", max_revisions + 1)
     raise DraftRejected(f"{question.id}: unresolved after revisions: {'; '.join(problems)}")
 
