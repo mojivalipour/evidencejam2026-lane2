@@ -18,6 +18,8 @@ from causa_nostra.answers.rubric import (
     RubricResult,
     evaluate_answered,
     evaluate_no_evidence,
+    item_texts,
+    normalise,
     rubric_score,
 )
 from causa_nostra.pipeline.types import Question, QuestionFrame, Verification
@@ -46,8 +48,11 @@ def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTION
         f"Judge each item as {choices}. Use only the records and search log; do not add outside knowledge.\n"
         f"{IRRELEVANT_GUIDANCE}\n\n"
         f"{sections}\n\n"
+        "Answer EVERY item id listed below. Omitting an id is not allowed.\n"
         "Return ONLY a JSON object with these keys:\n"
         f'- "items": object mapping each of these ids to {choices}: {item_ids}.\n'
+        '- "reasons": object mapping each of the same ids to one short sentence giving the reason for its judgement, '
+        "citing edge_ids where relevant. Every id needs a non-empty reason.\n"
         '- "problems": list of short strings describing each concrete problem. Empty list if none.\n'
         '- "supporting_edge_ids": list of edge_ids that directly answer BOTH the intervention and the outcome '
         "(and the requested context). Exclude edges that relate to only one side of the question."
@@ -103,11 +108,24 @@ class Verifier(Agent):
         )
         data = self._ask_json(system, user)
 
+        expected = item_texts(answered)
+        data, gaps = self._complete(system, user, data, expected)
         raw_items = data.get("items")
-        items = raw_items if isinstance(raw_items, dict) else {}
+        raw_items = raw_items if isinstance(raw_items, dict) else {}
+        raw_reasons = data.get("reasons")
+        raw_reasons = raw_reasons if isinstance(raw_reasons, dict) else {}
+        # An item with no judgement or no reason, even after the retry, counts as fail.
+        items = {
+            item: "fail" if item in gaps else normalise(raw_items.get(item), item) for item in expected
+        }
+        item_reasons = {
+            item: (str(raw_reasons.get(item) or "").strip() or "no reason returned") for item in expected
+        }
         result: RubricResult = evaluate_answered(items) if answered else evaluate_no_evidence(items)
         raw_problems = data.get("problems")
         problems = [str(p).strip() for p in raw_problems if str(p).strip()] if isinstance(raw_problems, list) else []
+        if gaps:
+            problems.insert(0, f"verifier left items unanswered: {', '.join(gaps)}")
         raw_supporting = data.get("supporting_edge_ids")
         # Only edges that matched both the intervention and the outcome count as supporting.
         # A one-sided candidate (e.g. the right outcome, a different intervention) must not block a valid no_evidence.
@@ -128,10 +146,35 @@ class Verifier(Agent):
         return Verification(
             passed=passed,
             criteria=result.criteria,
+            items=items,
+            item_reasons=item_reasons,
             problems=problems,
             supporting_edge_ids=supporting,
             score=result.score,
         )
+
+    @staticmethod
+    def _gaps(data: dict, expected: dict[str, str]) -> list[str]:
+        """Ids with no judgement or no reason in the verifier's reply."""
+        items = data.get("items") if isinstance(data.get("items"), dict) else {}
+        reasons = data.get("reasons") if isinstance(data.get("reasons"), dict) else {}
+        return [
+            item
+            for item in expected
+            if not str(items.get(item) or "").strip() or not str(reasons.get(item) or "").strip()
+        ]
+
+    def _complete(self, system: str, user: str, data: dict, expected: dict[str, str]) -> tuple[dict, list[str]]:
+        """Ask once more for missing ids. Returns the reply to use and any ids still missing."""
+        missing = self._gaps(data, expected)
+        if not missing:
+            return data, []
+        retry = (
+            f"{user}\n\nYour previous reply left these ids without a judgement or reason: "
+            f"{', '.join(missing)}. Return the complete JSON object with every id answered."
+        )
+        data = self._ask_json(system, retry)
+        return data, self._gaps(data, expected)
 
 
 if __name__ == "__main__":

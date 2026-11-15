@@ -7,7 +7,7 @@ most `max_revisions` times.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from causa_nostra.answers.models import AnswerEntry, AnswersFile, TEAM_NAME
@@ -53,7 +53,9 @@ def answer_question(
     stages: Stages,
     *,
     max_revisions: int = 1,
+    on_returned: Callable[[AnswerEntry, Verification], None] | None = None,
 ) -> AnswerEntry:
+    """Answer one question. `on_returned` receives the returned entry and the verification it was judged by."""
     qid = question.id
     stage_info(qid, "understand", "start")
     stage_debug(qid, "understand", "input", question)
@@ -72,6 +74,7 @@ def answer_question(
     # Last answered draft that passed the deterministic checks but failed verification.
     # Used only if no revision is accepted: its citations are kept and its confidence is lowered.
     unverified: AnswerEntry | None = None
+    unverified_verification: Verification | None = None
     for attempt in range(max_revisions + 1):
         stage_info(qid, "reason", "attempt %d, feedback items: %d", attempt + 1, len(feedback))
         stage_debug(qid, "reason", "input feedback", feedback)
@@ -97,9 +100,12 @@ def answer_question(
                 if verification.score is not None:
                     draft = draft.model_copy(update={"confidence": verification.score})
                 stage_info(qid, "done", "accepted after %d attempt(s)", attempt + 1)
+                if on_returned is not None:
+                    on_returned(draft, verification)
                 return draft
             if draft.status == "answered" and draft.edge_ids and not _correctness_failed(verification):
                 unverified = draft.model_copy(update={"confidence": verification.score or 0.0})
+                unverified_verification = verification
             problems = _verification_feedback(verification)
         if attempt == max_revisions:
             break
@@ -115,6 +121,8 @@ def answer_question(
             unverified.confidence,
             "; ".join(problems),
         )
+        if on_returned is not None and unverified_verification is not None:
+            on_returned(unverified, unverified_verification)
         return unverified
     stage_info(qid, "done", "rejected after %d attempt(s)", max_revisions + 1)
     raise DraftRejected(f"{question.id}: unresolved after revisions: {'; '.join(problems)}")

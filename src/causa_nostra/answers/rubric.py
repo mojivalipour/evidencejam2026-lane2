@@ -133,6 +133,15 @@ def weighted_score(judgements: Mapping[str, Judgement], weights: Mapping[str, fl
 CITATION_ITEMS: frozenset[str] = frozenset(ANSWERED_QUESTIONS["citation_support"])
 
 
+def item_texts(answered: bool) -> dict[str, str]:
+    """Every sub-item id with its question text, for the rubric that applies to the draft status."""
+    if answered:
+        return {item: text for items in ANSWERED_QUESTIONS.values() for item, text in items.items()}
+    return {item: text for items in NO_EVIDENCE_QUESTIONS.values() for item, text in items.items()} | {
+        "N6": NO_EVIDENCE_GATE_QUESTIONS["N6"]
+    }
+
+
 def normalise(value: object, item: str = "") -> Judgement:
     """Lower-case a judgement. Anything not in JUDGEMENT_CHOICES counts as fail.
     "irrelevant" is accepted only for OPTIONAL_ITEMS; on any other item it counts as fail."""

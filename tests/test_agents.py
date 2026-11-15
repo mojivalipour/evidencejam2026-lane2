@@ -17,9 +17,18 @@ class FakeClient:
         self.replies = list(replies)
         self.calls: list[list[dict]] = []
 
+    @staticmethod
+    def _with_reasons(text: str) -> str:
+        """Verifier replies: give every returned item a reason, so tests state only judgements."""
+        data = json.loads(text) if text.lstrip().startswith("{") else None
+        if isinstance(data, dict) and isinstance(data.get("items"), dict) and "reasons" not in data:
+            data["reasons"] = {item: "reason" for item in data["items"]}
+            return json.dumps(data)
+        return text
+
     def chat(self, messages, *, temperature=0.0, max_tokens=None, thinking=True):
         self.calls.append(messages)
-        return ChatResult(text=self.replies.pop(0))
+        return ChatResult(text=self._with_reasons(self.replies.pop(0)))
 
 
 def _record(edge_id: str = "e1", negated: bool = False) -> EvidenceRecord:
@@ -126,9 +135,13 @@ def test_verifier_fails_on_wrong_direction():
 
 
 def test_verifier_missing_items_count_as_fail():
-    result = Verifier(FakeClient(json.dumps({"items": {}, "problems": []}))).run(QUESTION, FRAME, _draft(), [_record()])
+    # Both the first reply and the retry omit every item: all items fail.
+    empty = json.dumps({"items": {}, "problems": []})
+    result = Verifier(FakeClient(empty, empty)).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is False
     assert result.criteria["citation_support"] == "fail"
+    assert result.problems[0] == "verifier left items unanswered: " + ", ".join(
+        item for category in ANSWERED_QUESTIONS.values() for item in category)
 
 
 def test_verifier_gate_failure_without_problems_gets_fallback_message():
@@ -146,9 +159,9 @@ def test_verifier_drops_non_string_and_unknown_supporting_ids():
 
 def test_verifier_non_dict_items_and_non_list_problems_are_handled():
     reply = json.dumps({"items": ["pass"], "problems": "oops"})
-    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
+    result = Verifier(FakeClient(reply, reply)).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is False
-    assert result.problems[0].startswith("gated items failed: A1")
+    assert result.problems[0].startswith("verifier left items unanswered")
 
 
 
@@ -202,9 +215,30 @@ def test_verifier_no_evidence_fails_when_evidence_was_found():
 
 def test_verifier_no_evidence_missing_items_fail():
     reply = json.dumps({"items": {"N6": "pass"}, "problems": []})
-    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _no_evidence_draft(), [_record()])
+    result = Verifier(FakeClient(reply, reply)).run(QUESTION, FRAME, _no_evidence_draft(), [_record()])
     assert result.passed is False
     assert result.score == pytest.approx(0.0)
+
+
+def test_verifier_retries_once_for_unanswered_items_and_uses_the_complete_reply():
+    partial = json.dumps({"items": {"A1": "pass"}, "problems": []})
+    complete = json.dumps({"items": _items(), "problems": []})
+    client = FakeClient(partial, complete)
+    result = Verifier(client).run(QUESTION, FRAME, _draft(), [_record()])
+    assert len(client.calls) == 2
+    assert "left these ids" in client.calls[1][1]["content"]
+    assert result.passed is True
+    assert set(result.item_reasons) == {item for category in ANSWERED_QUESTIONS.values() for item in category}
+
+
+def test_verifier_item_without_reason_counts_as_fail():
+    no_reason = json.dumps({"items": _items(), "reasons": {"A1": "shown in e1"}, "problems": []})
+    client = FakeClient(no_reason, no_reason)
+    result = Verifier(client).run(QUESTION, FRAME, _draft(), [_record()])
+    assert result.passed is False
+    assert result.items["A2"] == "fail"
+    assert result.item_reasons["A1"] == "shown in e1"
+    assert result.item_reasons["A2"] == "no reason returned"
 
 
 def test_verifier_no_evidence_cannot_pass_when_it_names_supporting_edges():

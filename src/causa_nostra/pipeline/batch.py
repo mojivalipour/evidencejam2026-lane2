@@ -16,16 +16,16 @@ import logging
 import os
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from causa_nostra.answers.models import AnswerEntry, AnswersFile, TEAM_NAME
-from causa_nostra.answers.evidence import write_evidence
+from causa_nostra.answers.evidence import write_evidence, write_rubric
 from causa_nostra.answers.validate import check_extras
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.run import REPO_ROOT, DraftRejected, answer_question
 from causa_nostra.pipeline.stages import Stages
-from causa_nostra.pipeline.types import Question
+from causa_nostra.pipeline.types import Question, Verification
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +98,20 @@ def attach_evidence(entry: AnswerEntry, store: GraphStore, evidence_dir: Path, r
     return entry.model_copy(update={"extras": [*entry.extras, path]})
 
 
+def attach_rubric(
+    entry: AnswerEntry, verification: Verification, evidence_dir: Path, repo_root: Path
+) -> AnswerEntry:
+    """Write the rubric page for the returned answer and list it in `extras`."""
+    try:
+        path = write_rubric(entry, verification, evidence_dir, repo_root)
+    except Exception as exc:  # optional page: never lose the answer over it
+        log.warning("rubric page for %s not written: %s", entry.id, exc)
+        return entry
+    if path is None or path in entry.extras:
+        return entry
+    return entry.model_copy(update={"extras": [*entry.extras, path]})
+
+
 def write_answers_atomic(path: str | Path, answers: AnswersFile) -> None:
     """Write `answers.json` via temp file + fsync + rename, so readers never see a partial file."""
     target = Path(path)
@@ -120,6 +134,7 @@ def _answer_with_retry(
     stages: Stages,
     repo_root: Path,
     max_revisions: int,
+    on_returned: Callable[[AnswerEntry, Verification], None] | None = None,
 ) -> tuple[AnswerEntry, list[str]]:
     """Run one question, retrying once on unexpected errors (e.g. transient LLM failures).
 
@@ -128,7 +143,7 @@ def _answer_with_retry(
     last_exc: Exception | None = None
     for attempt in range(2):
         try:
-            draft = answer_question(question, store, stages, max_revisions=max_revisions)
+            draft = answer_question(question, store, stages, max_revisions=max_revisions, on_returned=on_returned)
             return sanitize_entry(draft, store, repo_root)
         except DraftRejected:
             raise
@@ -158,14 +173,21 @@ def run_batch(
     evidence_dir = output.parent / f"{output.stem}_evidence"
 
     for index, question in enumerate(questions, start=1):
+        returned: dict[str, Verification] = {}
+
+        def remember(entry: AnswerEntry, verification: Verification, _qid: str = question.id) -> None:
+            returned[_qid] = verification
+
         try:
-            entry, repairs = _answer_with_retry(question, store, stages, repo_root, max_revisions)
+            entry, repairs = _answer_with_retry(question, store, stages, repo_root, max_revisions, remember)
             warnings.extend(repairs)
         except Exception as exc:  # per-question isolation: one failure must not stop the batch
             log.exception("question %s failed", question.id)
             failed.append(question.id)
             entry = fallback_entry(question.id, f"{type(exc).__name__}: {exc}")
         entry = attach_evidence(entry, store, evidence_dir, repo_root)
+        if question.id in returned:
+            entry = attach_rubric(entry, returned[question.id], evidence_dir, repo_root)
         entries[question.id] = entry
         # Progress goes to stderr so it never mixes with the answers file.
         print(f"[{index}/{len(questions)}] {question.id} {entry.status}", file=sys.stderr, flush=True)
