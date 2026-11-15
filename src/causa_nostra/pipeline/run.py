@@ -14,6 +14,7 @@ from causa_nostra.answers.models import AnswerEntry, AnswersFile, TEAM_NAME
 from causa_nostra.answers.validate import check_entry, check_file
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.stages import Stages
+from causa_nostra.pipeline.trace import stage_debug, stage_info
 from causa_nostra.pipeline.types import Question
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -30,25 +31,53 @@ def answer_question(
     *,
     max_revisions: int = 1,
 ) -> AnswerEntry:
+    qid = question.id
+    stage_info(qid, "understand", "start")
+    stage_debug(qid, "understand", "input", question)
     frame = stages.understand(question)
-    records = stages.retrieve(frame)
+    stage_info(qid, "understand", "intervention=%r outcome=%r", frame.intervention, frame.outcome)
+    stage_debug(qid, "understand", "output", frame)
 
-    draft = stages.reason(question, frame, records, [])
+    stage_info(qid, "retrieve", "start")
+    stage_debug(qid, "retrieve", "input", frame)
+    records = stages.retrieve(frame)
+    top = ", ".join(r.edge_id for r in records[:5]) or "none"
+    stage_info(qid, "retrieve", "%d record(s), top: %s", len(records), top)
+    stage_debug(qid, "retrieve", "output", records)
+
+    feedback: list[str] = []
     for attempt in range(max_revisions + 1):
+        stage_info(qid, "reason", "attempt %d, feedback items: %d", attempt + 1, len(feedback))
+        stage_debug(qid, "reason", "input feedback", feedback)
+        draft = stages.reason(question, frame, records, feedback)
+        stage_info(
+            qid, "reason", "status=%s direction=%s edges=%d", draft.status, draft.direction, len(draft.edge_ids)
+        )
+        stage_debug(qid, "reason", "output", draft)
+
         # Deterministic checks first: cheap, and they catch hallucinated citations.
         problems = check_entry(draft, store)
-        if not problems:
+        if problems:
+            stage_info(qid, "check", "failed: %d problem(s)", len(problems))
+            stage_debug(qid, "check", "problems", problems)
+        else:
+            stage_info(qid, "check", "passed")
+            stage_info(qid, "verify", "start")
             verification = stages.verify(question, frame, draft, records)
+            stage_info(qid, "verify", "passed=%s score=%s", verification.passed, verification.score)
+            stage_debug(qid, "verify", "output", verification)
             if verification.passed:
                 # The accepted confidence is the deterministic rubric score, not the model's self-estimate.
                 if verification.score is not None:
                     draft = draft.model_copy(update={"confidence": verification.score})
+                stage_info(qid, "done", "accepted after %d attempt(s)", attempt + 1)
                 return draft
             problems = verification.problems or ["verification failed"]
         if attempt == max_revisions:
             break
-        draft = stages.reason(question, frame, records, problems)
+        feedback = problems
 
+    stage_info(qid, "done", "rejected after %d attempt(s)", max_revisions + 1)
     raise DraftRejected(f"{question.id}: unresolved after revisions: {'; '.join(problems)}")
 
 
