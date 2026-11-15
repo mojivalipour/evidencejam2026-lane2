@@ -23,9 +23,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from causa_nostra.pipeline.types import QuestionFrame
+from causa_nostra.pipeline.types import Facet, QuestionFrame
 from causa_nostra.retrieval.bm25 import BM25Index
 from causa_nostra.retrieval.records import EvidenceRecord
+
+# A multi-facet question may return up to this many times `top_k` records in total.
+MULTI_FACET_FACTOR = 2
 
 
 def side_queries(frame: QuestionFrame) -> tuple[str, str]:
@@ -44,10 +47,35 @@ def side_queries(frame: QuestionFrame) -> tuple[str, str]:
     return subject_query, object_query
 
 
+def facet_queries(facet: Facet) -> tuple[str, str]:
+    """The subject-side and object-side queries for one facet."""
+    subject_query = " ".join([facet.intervention, *facet.intervention_terms]).strip()
+    object_query = " ".join([facet.outcome, *facet.outcome_terms]).strip()
+    return subject_query, object_query
+
+
 def search_query(frame: QuestionFrame) -> str:
-    """Human-readable record of the two side queries, for the verifier's log."""
+    """Human-readable record of the side queries (and any facet queries), for the verifier's log."""
     subject_query, object_query = side_queries(frame)
-    return f"subject side: [{subject_query}] | object side: [{object_query}]"
+    lines = [f"subject side: [{subject_query}] | object side: [{object_query}]"]
+    for facet in frame.facets:
+        facet_subject, facet_object = facet_queries(facet)
+        lines.append(f"facet: subject side: [{facet_subject}] | object side: [{facet_object}]")
+    return "\n".join(lines)
+
+
+def _round_robin(ranked: list[list[str]], limit: int) -> list[str]:
+    """Interleave ranked lists (first of each, then second of each, ...), dropping repeats."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for position in range(max((len(r) for r in ranked), default=0)):
+        for ids in ranked:
+            if position < len(ids) and ids[position] not in seen:
+                seen.add(ids[position])
+                merged.append(ids[position])
+                if len(merged) == limit:
+                    return merged
+    return merged
 
 
 def _relative_scores(index: BM25Index, query: str) -> dict[str, float]:
@@ -86,7 +114,19 @@ class RetrievalPipeline:
         if not frame.intervention.strip() or not frame.outcome.strip():
             return self._broad_search(frame)
 
-        subject_query, object_query = side_queries(frame)
+        main = self._two_sided(*side_queries(frame))
+        if not frame.facets:
+            return [self._records[edge_id] for edge_id in main[: self._top_k]]
+
+        # Multi-part question: each facet gets its own ranked list, and the lists are
+        # interleaved so a specific named item is not crowded out by the umbrella query.
+        ranked = [self._two_sided(*facet_queries(facet)) for facet in frame.facets]
+        ranked.append(main)
+        merged = _round_robin(ranked, self._top_k * MULTI_FACET_FACTOR)
+        return [self._records[edge_id] for edge_id in merged]
+
+    def _two_sided(self, subject_query: str, object_query: str) -> list[str]:
+        """Edge ids matching both sides, best first, at most `top_k`."""
         subject_scores = _relative_scores(self._subjects, subject_query)
         object_scores = _relative_scores(self._objects, object_query)
         both = [edge_id for edge_id in subject_scores if edge_id in object_scores]
@@ -101,7 +141,7 @@ class RetrievalPipeline:
 
         # Highest combined score first; edge id breaks ties so the order is stable.
         chosen.sort(key=lambda edge_id: (-(subject_scores[edge_id] + object_scores[edge_id]), edge_id))
-        return [self._records[edge_id] for edge_id in chosen[: self._top_k]]
+        return chosen[: self._top_k]
 
     def _broad_search(self, frame: QuestionFrame) -> list[EvidenceRecord]:
         """One query over the full record text, for frames without two sides."""

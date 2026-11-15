@@ -15,8 +15,12 @@ from causa_nostra.answers.validate import check_entry, check_file
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.stages import Stages
 from causa_nostra.pipeline.types import Question
+from causa_nostra.retrieval.records import EvidenceRecord
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Highest confidence for a no_evidence answer when retrieval found candidate records.
+NO_EVIDENCE_WITH_CANDIDATES_CAP = 0.5
 
 
 class DraftRejected(RuntimeError):
@@ -33,6 +37,9 @@ def answer_question(
     frame = stages.understand(question)
     records = stages.retrieve(frame)
 
+    # A verified no_evidence draft held back while the reasoner re-checks the candidates.
+    held_no_evidence: AnswerEntry | None = None
+
     draft = stages.reason(question, frame, records, [])
     for attempt in range(max_revisions + 1):
         # Deterministic checks first: cheap, and they catch hallucinated citations.
@@ -43,13 +50,41 @@ def answer_question(
                 # The accepted confidence is the deterministic rubric score, not the model's self-estimate.
                 if verification.score is not None:
                     draft = draft.model_copy(update={"confidence": verification.score})
-                return draft
-            problems = verification.problems or ["verification failed"]
+                if draft.status != "no_evidence" or not records:
+                    return draft
+                # no_evidence although candidate records matched both sides: look once more, then cap.
+                capped = _cap_no_evidence(draft)
+                if held_no_evidence is not None or attempt == max_revisions:
+                    return capped
+                held_no_evidence = capped
+                problems = [_recheck_message(records)]
+            else:
+                problems = verification.problems or ["verification failed"]
         if attempt == max_revisions:
             break
         draft = stages.reason(question, frame, records, problems)
 
+    if held_no_evidence is not None:
+        return held_no_evidence  # the re-check did not produce a verified answer
     raise DraftRejected(f"{question.id}: unresolved after revisions: {'; '.join(problems)}")
+
+
+def _cap_no_evidence(draft: AnswerEntry) -> AnswerEntry:
+    """Cap confidence of a no_evidence answer given while candidate records exist.
+
+    The verifier can pass a too-narrow search; with candidates on both sides the
+    absence claim is less certain, so it never goes out at full confidence.
+    """
+    return draft.model_copy(update={"confidence": min(draft.confidence, NO_EVIDENCE_WITH_CANDIDATES_CAP)})
+
+
+def _recheck_message(records: list[EvidenceRecord]) -> str:
+    return (
+        f"The draft says no_evidence, but {len(records)} retrieved record(s) match both the "
+        "intervention and the outcome side of the search. Check every record against each part "
+        "of the question. If any record answers any part, return status \"answered\" for that part "
+        "and say which parts have no evidence. Keep no_evidence only if no record matches any part."
+    )
 
 
 def _unresolved_entry(question: Question, reason: str) -> AnswerEntry:

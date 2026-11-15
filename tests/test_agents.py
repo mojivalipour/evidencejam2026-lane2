@@ -88,8 +88,21 @@ def test_reasoner_rejects_inconsistent_answered_entry():
     reply = json.dumps({"status": "answered", "answer": "x", "direction": None, "confidence": 0.5,
                         "certainty": None, "edge_ids": []})
     frame = QuestionFrame(question_id="H-1", intervention="a", outcome="b")
+    # The reasoner re-asks once; a second invalid reply is still rejected.
+    client = FakeClient(reply, reply)
     with pytest.raises(ValueError):
-        Reasoner(FakeClient(reply)).run(QUESTION, frame, [_record()], feedback=[])
+        Reasoner(client).run(QUESTION, frame, [_record()], feedback=[])
+    assert len(client.calls) == 2
+    assert "previous reply was invalid" in client.calls[1][1]["content"]
+
+
+def test_reasoner_recovers_when_reask_fixes_the_contract():
+    bad = json.dumps({"status": "answered", "answer": "x", "direction": "mixed", "confidence": 0.5,
+                      "certainty": "low", "edge_ids": []})
+    good = json.dumps({"status": "answered", "answer": "Lower [e1].", "direction": "decrease",
+                       "confidence": 0.5, "certainty": "low", "edge_ids": ["e1"]})
+    entry = Reasoner(FakeClient(bad, good)).run(QUESTION, FRAME, [_record()], feedback=[])
+    assert entry.status == "answered" and entry.edge_ids == ["e1"]
 
 
 # --- verifier ---------------------------------------------------------------

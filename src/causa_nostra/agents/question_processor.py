@@ -9,10 +9,12 @@ restriction is invented.
 from __future__ import annotations
 
 from causa_nostra.agents.base import Agent, AgentOutputError, ChatClient
-from causa_nostra.pipeline.types import Question, QuestionFrame
+from causa_nostra.pipeline.types import Facet, Question, QuestionFrame
 
 MAX_SEARCH_TERMS = 15
 MAX_SIDE_TERMS = 10
+MAX_FACETS = 8
+MAX_FACET_TERMS = 5
 
 SYSTEM_PROMPT = """You extract the structure of a causal question about ecology.
 The question asks what one intervention or condition does to one outcome.
@@ -23,6 +25,7 @@ Return ONLY a JSON object with these keys:
 - "context": list of context constraints stated explicitly in the question. Use [] if none. Do not invent constraints.
 - "intervention_terms": up to 10 alternative words or phrases for the INTERVENTION only (synonyms, singular/plural, common variants). Do not include outcome terms.
 - "outcome_terms": up to 10 alternative words or phrases for the OUTCOME only (synonyms, singular/plural, common variants). Do not include intervention terms.
+- "facets": list of concrete sub-questions, one per specific intervention or condition the question names (including examples after "such as" or "for example", and any follow-up action such as remediation or restoration). Each facet is an object with "intervention", "outcome", "intervention_terms" (up to 5) and "outcome_terms" (up to 5). Use the specific named items, not the umbrella term: for "contaminants such as PCBs and oil sands tailings" give one facet for PCBs and one for oil sands tailings. Outcome terms should be concrete measurable attributes (e.g. mortality, survival, growth, reproduction, abundance, richness, cover, concentration). Use [] if the question names only one intervention and one outcome. At most 8 facets.
 
 These are search candidates only. Do not answer the question. Do not add information that is not in the question."""
 
@@ -50,10 +53,38 @@ def _side_terms(intervention_raw: object, outcome_raw: object) -> tuple[list[str
     )
 
 
+def _facets(raw: object) -> list[Facet]:
+    """Parse the model's facet list, skipping malformed entries and duplicates."""
+    if not isinstance(raw, list):
+        return []
+    facets: list[Facet] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        intervention = str(item.get("intervention") or "").strip()
+        outcome = str(item.get("outcome") or "").strip()
+        key = (intervention.lower(), outcome.lower())
+        if not intervention or not outcome or key in seen:
+            continue
+        seen.add(key)
+        facets.append(
+            Facet(
+                intervention=intervention,
+                outcome=outcome,
+                intervention_terms=_clean_list(item.get("intervention_terms"))[:MAX_FACET_TERMS],
+                outcome_terms=_clean_list(item.get("outcome_terms"))[:MAX_FACET_TERMS],
+            )
+        )
+        if len(facets) == MAX_FACETS:
+            break
+    return facets
+
+
 class QuestionProcessor(Agent):
     """Short structured extraction: reasoning is switched off for speed and energy."""
 
-    def __init__(self, client: ChatClient, *, max_tokens: int = 1024) -> None:
+    def __init__(self, client: ChatClient, *, max_tokens: int = 2048) -> None:  # room for facets
         super().__init__(client, max_tokens=max_tokens, thinking=False)
 
     def run(self, question: Question) -> QuestionFrame:
@@ -75,6 +106,7 @@ class QuestionProcessor(Agent):
             search_terms=combined[:MAX_SEARCH_TERMS],
             intervention_terms=intervention_terms,
             outcome_terms=outcome_terms,
+            facets=_facets(data.get("facets")),
         )
 
 
@@ -96,6 +128,8 @@ def format_frame(question: Question, frame: QuestionFrame) -> str:
     lines += [f"  - {term}" for term in frame.outcome_terms]
     lines.append(f"search_terms ({len(frame.search_terms)}):")
     lines += [f"  - {term}" for term in frame.search_terms]
+    lines.append(f"facets ({len(frame.facets)}):")
+    lines += [f"  - {f.intervention} -> {f.outcome}" for f in frame.facets]
     lines.append("=" * width)
     return "\n".join(lines)
 

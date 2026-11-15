@@ -10,10 +10,15 @@ from __future__ import annotations
 
 import re
 
+from pydantic import ValidationError
+
 from causa_nostra.agents.base import Agent, ChatClient
 from causa_nostra.answers.models import AnswerEntry
 from causa_nostra.pipeline.types import Question, QuestionFrame
+from causa_nostra.retrieval.pipeline import search_query
 from causa_nostra.retrieval.records import EvidenceRecord
+
+_MODEL_KEYS = ("status", "answer", "direction", "confidence", "certainty", "edge_ids", "searched_for")
 
 NO_EVIDENCE_ANSWER = "The graph has no evidence answering this intervention–outcome question."
 
@@ -27,10 +32,11 @@ Interpretation rules:
 - Keep conflicting records. If studies disagree, use direction "mixed".
 - Do not chain edges to infer a new effect. Do not use outside knowledge.
 - Cite only edge_ids that appear in the records. Cite the edges that support the answer.
+- If the question has several parts (several interventions, outcomes or examples), answer each part the records cover and state plainly which parts have no matching evidence. Use status "answered" if any part is answered; use "no_evidence" only if no record matches any part.
 
 Return ONLY a JSON object with these keys:
 - "status": "answered" if matching evidence exists, otherwise "no_evidence".
-- "answer": one short plain-language sentence. After each claim, put the supporting edge_id in square brackets, e.g. "Burning reduced grass cover [camo:edge_x]."
+- "answer": one to three short plain-language sentences. After each claim, put the supporting edge_id in square brackets, e.g. "Burning reduced grass cover [camo:edge_x]."
 - "direction": "increase", "decrease", "no_effect", "mixed", or "unclear" if status is answered; otherwise null.
 - "confidence": number from 0 to 1, your probability that the answer matches the graph.
 - "certainty": "high", "moderate", "low", or "very_low" if answered; otherwise null.
@@ -63,7 +69,7 @@ def with_citations(answer: str, edge_ids: list[str]) -> str:
 class Reasoner(Agent):
     """Evidence reasoning. Thinking is off for speed; re-enable if accuracy drops on practice questions."""
 
-    def __init__(self, client: ChatClient, *, max_records: int = 20, max_tokens: int = 4096) -> None:
+    def __init__(self, client: ChatClient, *, max_records: int = 40, max_tokens: int = 4096) -> None:
         super().__init__(client, max_tokens=max_tokens, thinking=False)
         self._max_records = max_records
 
@@ -84,16 +90,41 @@ class Reasoner(Agent):
         if feedback:
             user += "\nThe previous draft failed verification. Fix these problems:\n- " + "\n- ".join(feedback)
 
-        data = self._ask_json(SYSTEM_PROMPT, user)
+        # One re-ask when the reply breaks the output contract (e.g. "answered" with no edge_ids),
+        # with the validation error as feedback. A second invalid reply raises.
+        for attempt in range(2):
+            raw = self._ask_json(SYSTEM_PROMPT, user)
+            try:
+                entry = AnswerEntry.model_validate(self._entry_data(raw, question, frame))
+                break
+            except ValidationError as exc:
+                if attempt == 1:
+                    raise
+                problems = "; ".join(err["msg"] for err in exc.errors())
+                user += (
+                    f"\n\nYour previous reply was invalid: {problems}. An \"answered\" reply needs a direction, "
+                    "a certainty and at least one edge_id from the records. If no record supports any part "
+                    "of the question, reply with status \"no_evidence\"."
+                )
+        if entry.status == "answered":
+            entry = entry.model_copy(update={"answer": with_citations(entry.answer, entry.edge_ids)})
+        return entry
+
+    @staticmethod
+    def _entry_data(raw: dict, question: Question, frame: QuestionFrame) -> dict:
+        # AnswerEntry forbids unknown keys; drop anything extra the model adds (e.g. "reasoning").
+        data = {key: raw[key] for key in _MODEL_KEYS if key in raw}
         data["id"] = question.id
         data["extras"] = []
         if not data.get("answer"):
             # Model often returns null for no_evidence; the contract needs a string.
             data["answer"] = NO_EVIDENCE_ANSWER
-        entry = AnswerEntry.model_validate(data)
-        if entry.status == "answered":
-            entry = entry.model_copy(update={"answer": with_citations(entry.answer, entry.edge_ids)})
-        return entry
+        if data.get("status") == "no_evidence":
+            # The contract requires these empty for no_evidence; the model often fills them anyway.
+            data.update(direction=None, certainty=None, edge_ids=[])
+            if not data.get("searched_for"):
+                data["searched_for"] = search_query(frame)
+        return data
 
 
 if __name__ == "__main__":

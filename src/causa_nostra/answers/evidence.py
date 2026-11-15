@@ -67,7 +67,8 @@ def write_evidence(entry: AnswerEntry, store: GraphStore, out_dir: str | Path, r
     path = out / f"{quote(entry.id, safe='')}_evidence.html"
     path.write_text(render_evidence_html(entry, records), encoding="utf-8")
     try:
-        return str(path.resolve().relative_to(repo_root.resolve()))
+        # POSIX separators, so a file written on Windows still resolves for graders on Linux.
+        return path.resolve().relative_to(repo_root.resolve()).as_posix()
     except ValueError:
         return None  # outside the repo: cannot be listed as a repo-relative extra
 

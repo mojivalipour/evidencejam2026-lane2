@@ -12,6 +12,20 @@ class Question(BaseModel):
     question: str = Field(min_length=1)
 
 
+class Facet(BaseModel):
+    """One concrete intervention -> outcome pair inside a multi-part question.
+
+    A question that lists several interventions or outcomes ("oil sands tailings,
+    PCBs and acid deposition") is searched one facet at a time, so specific
+    named items are not drowned out by the umbrella wording.
+    """
+
+    intervention: str
+    outcome: str
+    intervention_terms: list[str] = Field(default_factory=list)
+    outcome_terms: list[str] = Field(default_factory=list)
+
+
 class QuestionFrame(BaseModel):
     """Output of Understand: what the question asks, in graph terms."""
 
@@ -22,6 +36,7 @@ class QuestionFrame(BaseModel):
     search_terms: list[str] = Field(default_factory=list)  # candidates, not equivalences
     intervention_terms: list[str] = Field(default_factory=list)  # searched on the subject side only
     outcome_terms: list[str] = Field(default_factory=list)  # searched on the object side only
+    facets: list[Facet] = Field(default_factory=list)  # concrete sub-questions, searched separately
 
 
 class Verification(BaseModel):
