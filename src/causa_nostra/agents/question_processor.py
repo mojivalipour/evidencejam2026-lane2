@@ -26,6 +26,15 @@ Return ONLY a JSON object with these keys:
 
 These are search candidates only. Do not answer the question. Do not add information that is not in the question."""
 
+REFINE_SYSTEM_PROMPT = """A keyword search for a causal ecology question found no evidence in a graph.
+Propose broader or different search terms for the SAME intervention and the SAME outcome.
+
+Return ONLY a JSON object with these keys:
+- "intervention_terms": up to 10 new words or phrases for the intervention (broader category, related practice, other spelling).
+- "outcome_terms": up to 10 new words or phrases for the outcome (broader category, related measured attribute).
+
+Do not repeat terms already tried. Do not change the intervention or outcome. Do not answer the question."""
+
 
 def _clean_list(values: object) -> list[str]:
     if not isinstance(values, list):
@@ -76,6 +85,40 @@ class QuestionProcessor(Agent):
             intervention_terms=intervention_terms,
             outcome_terms=outcome_terms,
         )
+
+    def refine(self, question: Question, frame: QuestionFrame) -> QuestionFrame:
+        """Broaden the search terms after a failed search. Returns the frame unchanged if no new term is found."""
+        tried = [*frame.intervention_terms, *frame.outcome_terms, *frame.search_terms]
+        user = (
+            f"Question: {question.question}\n"
+            f"Intervention: {frame.intervention}\n"
+            f"Outcome: {frame.outcome}\n"
+            f"Terms already tried: {', '.join(tried) or 'none'}"
+        )
+        data = self._ask_json(REFINE_SYSTEM_PROMPT, user)
+        known = {t.lower() for t in tried}
+        new_intervention, new_outcome = _side_terms(data.get("intervention_terms"), data.get("outcome_terms"))
+        new_intervention = [t for t in new_intervention if t.lower() not in known]
+        new_outcome = [t for t in new_outcome if t.lower() not in known]
+        if not new_intervention and not new_outcome:
+            return frame
+        intervention_terms = _merge(frame.intervention_terms, new_intervention)
+        outcome_terms = _merge(frame.outcome_terms, new_outcome)
+        return QuestionFrame(
+            question_id=frame.question_id,
+            intervention=frame.intervention,
+            outcome=frame.outcome,
+            context=frame.context,
+            search_terms=_merge(frame.search_terms, [*new_intervention, *new_outcome])[:MAX_SEARCH_TERMS],
+            intervention_terms=intervention_terms,
+            outcome_terms=outcome_terms,
+        )
+
+
+def _merge(existing: list[str], extra: list[str]) -> list[str]:
+    """Existing terms first, then new ones, without case-insensitive duplicates, capped per side."""
+    merged = _clean_list([*existing, *extra])
+    return merged[: 2 * MAX_SIDE_TERMS]
 
 
 def format_frame(question: Question, frame: QuestionFrame) -> str:

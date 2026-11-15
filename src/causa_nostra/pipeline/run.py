@@ -71,6 +71,7 @@ def answer_question(
     stage_debug(qid, "retrieve", "output", records)
 
     feedback: list[str] = []
+    refined = False
     # Last answered draft that passed the deterministic checks but failed verification.
     # Used only if no revision is accepted: its citations are kept and its confidence is lowered.
     unverified: AnswerEntry | None = None
@@ -83,6 +84,24 @@ def answer_question(
             qid, "reason", "status=%s direction=%s edges=%d", draft.status, draft.direction, len(draft.edge_ids)
         )
         stage_debug(qid, "reason", "output", draft)
+
+        # A failed first search gets one broader search before the question is called no_evidence.
+        if draft.status == "no_evidence" and stages.refine is not None and not refined:
+            refined = True
+            broader = stages.refine(question, frame)
+            if broader != frame:
+                frame = broader
+                records = stages.retrieve(frame)
+                top = ", ".join(r.edge_id for r in records[:5]) or "none"
+                stage_info(qid, "refine", "%d record(s) after broader search, top: %s", len(records), top)
+                stage_debug(qid, "refine", "frame", frame)
+                draft = stages.reason(question, frame, records, feedback)
+                stage_info(
+                    qid, "reason", "after refine: status=%s edges=%d", draft.status, len(draft.edge_ids)
+                )
+                stage_debug(qid, "reason", "output after refine", draft)
+            else:
+                stage_info(qid, "refine", "no new terms")
 
         # Deterministic checks first: cheap, and they catch hallucinated citations.
         problems = check_entry(draft, store)

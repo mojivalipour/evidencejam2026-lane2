@@ -36,13 +36,21 @@ __all__ = [
 ]
 
 
-def build_system_prompt() -> str:
-    """One verifier prompt for every draft: all 22 sub-items are asked, and the agent marks the ones that do not apply."""
+def build_system_prompt(answered: bool | None = None) -> str:
+    """Verifier prompt. `answered=None` lists all 22 sub-items; True or False lists only that draft's own items.
+
+    Asking only the applicable items keeps the reply short, which keeps verification fast.
+    """
     choices = ", ".join(f'"{choice}"' for choice in JUDGEMENT_CHOICES)
     groups = {
         "Answered-draft items": ANSWERED_QUESTIONS,
         "Missing-evidence items": {**NO_EVIDENCE_QUESTIONS, "absence_gate": {"N6": NO_EVIDENCE_GATE_QUESTIONS["N6"]}},
     }
+    if answered is True:
+        groups.pop("Missing-evidence items")
+    elif answered is False:
+        groups.pop("Answered-draft items")
+    own_ids = all_item_texts() if answered is None else item_texts(answered)
     sections = "\n\n".join(
         f"{group}:\n" + "\n\n".join(
             f"{category}:\n" + "\n".join(f'- "{item}": {text}' for item, text in items.items())
@@ -50,7 +58,7 @@ def build_system_prompt() -> str:
         )
         for group, categories in groups.items()
     )
-    item_ids = ", ".join(f'"{item}"' for item in all_item_texts())
+    item_ids = ", ".join(f'"{item}"' for item in own_ids)
     guidance = (
         'Mark an item "irrelevant" when it does not apply to this draft. For an answered draft, the '
         "Missing-evidence items do not apply. For a no_evidence draft, the Answered-draft items do not apply, "
@@ -65,7 +73,7 @@ def build_system_prompt() -> str:
         "Answer EVERY item id listed below. Omitting an id is not allowed.\n"
         "Return ONLY a JSON object with these keys:\n"
         f'- "items": object mapping each of these ids to {choices}: {item_ids}.\n'
-        '- "reasons": object mapping each of the same ids to one short sentence giving the reason for its judgement, '
+        '- "reasons": object mapping each of the same ids to a reason of at most 15 words, '
         "citing edge_ids where relevant. Every id needs a non-empty reason.\n"
         '- "problems": list of short strings describing each concrete problem. Empty list if none.\n'
         '- "supporting_edge_ids": list of edge_ids that directly answer BOTH the intervention and the outcome '
@@ -74,7 +82,8 @@ def build_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = build_system_prompt()
-NO_EVIDENCE_SYSTEM_PROMPT = SYSTEM_PROMPT  # one prompt for every draft
+ANSWERED_SYSTEM_PROMPT = build_system_prompt(True)
+NO_EVIDENCE_SYSTEM_PROMPT = build_system_prompt(False)
 
 
 class Verifier(Agent):
@@ -100,13 +109,17 @@ class Verifier(Agent):
     ) -> Verification:
         # Status selects both the prompt and the rubric: missing-evidence drafts never get answered items.
         answered = draft.status == "answered"
-        system = SYSTEM_PROMPT
+        system = ANSWERED_SYSTEM_PROMPT if answered else NO_EVIDENCE_SYSTEM_PROMPT
 
         by_id = {r.edge_id: r for r in records}
         cited_text = "\n".join(
             f"[{e}]\n{structured_text(by_id[e])}" for e in draft.edge_ids if e in by_id
         ) or "(none)"
-        retrieved_text = "\n".join(f"[{r.edge_id}]\n{structured_text(r)}" for r in records) or "(none)"
+        # Retrieved records are listed as one short line each: the verifier only needs them to spot
+        # which edges bear on the question. Full text is sent only for cited records.
+        retrieved_text = "\n".join(
+            f"[{r.edge_id}] {r.subject_label[:160]} -> {r.object_label[:160]}" for r in records
+        ) or "(none)"
         search_log = (
             f"Executed query: {search_query(frame)}\n"
             f"Alternative terms searched: {', '.join(frame.search_terms) or '(none)'}\n"
@@ -127,8 +140,8 @@ class Verifier(Agent):
         )
         data = self._ask(system, user)
 
-        expected = all_item_texts()
-        own = item_texts(answered)
+        expected = item_texts(answered)
+        own = expected
         data, gaps = self._complete(system, user, data, expected)
         raw_items = data.get("items")
         raw_items = raw_items if isinstance(raw_items, dict) else {}

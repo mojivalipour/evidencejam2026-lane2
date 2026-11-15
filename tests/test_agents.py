@@ -6,7 +6,7 @@ import pytest
 
 from causa_nostra.agents import AgentOutputError, QuestionProcessor, Reasoner, Verifier, parse_json_object, rubric_score
 from causa_nostra.answers.models import AnswerEntry
-from causa_nostra.answers.rubric import ANSWERED_QUESTIONS, all_item_texts
+from causa_nostra.answers.rubric import ANSWERED_QUESTIONS, item_texts
 from causa_nostra.llm.client import ChatResult
 from causa_nostra.pipeline.types import Question, QuestionFrame
 from causa_nostra.retrieval.records import EvidenceRecord
@@ -142,7 +142,7 @@ def test_verifier_missing_items_count_as_fail():
     result = Verifier(FakeClient(empty, empty)).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is False
     assert result.criteria["citation_support"] == "fail"
-    assert result.problems[0] == "verifier left items unanswered: " + ", ".join(all_item_texts())
+    assert result.problems[0] == "verifier left items unanswered: " + ", ".join(item_texts(True))
 
 
 def test_verifier_gate_failure_without_problems_gets_fallback_message():
@@ -204,8 +204,8 @@ def test_verifier_no_evidence_draft_uses_missing_evidence_prompt_and_rubric():
     assert set(result.criteria) == {"interpretation", "search_coverage", "candidates_checked"}
     system = client.calls[0][0]["content"]
     assert '"N6"' in system
-    assert '"A1"' in system  # one prompt for every draft: all 22 items are asked
-    assert result.items["A1"] == "irrelevant"  # recorded, not scored for a no_evidence draft
+    assert '"A1"' not in system  # only the draft's own items are asked: keeps verification fast
+    assert "A1" not in result.items  # other rubric's items are not judged for this draft
 
 
 def test_verifier_no_evidence_fails_when_evidence_was_found():
@@ -231,8 +231,7 @@ def test_verifier_retries_once_for_unanswered_items_and_uses_the_complete_reply(
     assert len(client.calls) == 2
     assert "left these ids" in client.calls[1][1]["content"]
     assert result.passed is True
-    assert set(result.item_reasons) == {item for category in ANSWERED_QUESTIONS.values() for item in category} | {
-        "N1", "N2", "N3", "N4", "N5", "N6"}
+    assert set(result.item_reasons) == {item for category in ANSWERED_QUESTIONS.values() for item in category}
 
 
 def test_verifier_item_without_reason_counts_as_fail():
