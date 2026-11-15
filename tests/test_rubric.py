@@ -110,3 +110,27 @@ def test_no_evidence_gate_on_absence_claim() -> None:
 def test_prompt_contains_every_answered_sub_item() -> None:
     for item in (item for category in ANSWERED_QUESTIONS.values() for item in category):
         assert f'"{item}"' in SYSTEM_PROMPT
+
+
+def test_weighted_score_rejects_invalid_judgement_and_missing_criteria() -> None:
+    from causa_nostra.answers.rubric import weighted_score
+
+    valid = {name: "pass" for name in ANSWERED_WEIGHTS}
+    with pytest.raises(ValueError):
+        weighted_score(valid | {"evidence_match": "maybe"}, ANSWERED_WEIGHTS)
+    with pytest.raises(ValueError):
+        weighted_score({"evidence_match": "pass"}, ANSWERED_WEIGHTS)
+
+
+def test_no_evidence_partial_item_is_weighted() -> None:
+    items = {"N1": "pass", "N2": "pass", "N3": "pass", "N4": "partial", "N5": "pass", "N6": "pass"}
+    result = evaluate_no_evidence(items)
+    assert result.criteria["candidates_checked"] == "partial"
+    assert result.score == pytest.approx(0.85)
+    assert result.passed
+
+
+def test_no_evidence_gate_irrelevant_is_not_a_failure() -> None:
+    # N6 is not a citation item, so "irrelevant" is a valid judgement and does not fail the gate.
+    items = {"N1": "pass", "N2": "pass", "N3": "pass", "N4": "pass", "N5": "pass", "N6": "irrelevant"}
+    assert evaluate_no_evidence(items).passed is True

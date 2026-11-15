@@ -130,6 +130,26 @@ def test_verifier_missing_items_count_as_fail():
     assert result.criteria["citation_support"] == "fail"
 
 
+def test_verifier_gate_failure_without_problems_gets_fallback_message():
+    reply = json.dumps({"items": _items(C1="fail"), "problems": []})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
+    assert result.passed is False
+    assert result.problems == ["gated items failed: C1"]
+
+
+def test_verifier_drops_non_string_and_unknown_supporting_ids():
+    reply = json.dumps({"items": _items(), "problems": [], "supporting_edge_ids": ["e1", 3, None, "ghost"]})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
+    assert result.supporting_edge_ids == ["e1"]
+
+
+def test_verifier_non_dict_items_and_non_list_problems_are_handled():
+    reply = json.dumps({"items": ["pass"], "problems": "oops"})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
+    assert result.passed is False
+    assert result.problems[0].startswith("gated items failed: A1")
+
+
 
 def test_rubric_score_is_weighted_in_python():
     all_pass = {"evidence_match": "pass", "direction_and_causal_language": "pass",
