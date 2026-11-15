@@ -145,9 +145,7 @@ The question-processing, reasoning, and verification stages are connected to the
 
 ## Solution architecture diagram
 
-*Space reserved for the final solution architecture diagram.*
-
-<!-- Add the final architecture image or Mermaid diagram here. -->
+![CAUSA NOSTRA solution architecture](assets/proposed_method.jpg)
 
 ## Contributors
 
