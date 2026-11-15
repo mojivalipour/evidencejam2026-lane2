@@ -6,6 +6,10 @@ CAUSA NOSTRA answers ecology questions using the supplied Causal Mosaic (CAMO) g
 
 The program does not search the web. It can only answer from evidence found in the supplied graph.
 
+## Solution architecture
+
+![CAUSA NOSTRA solution architecture](assets/proposed_method.jpg)
+
 ## Run the project
 
 From the project folder, run:
@@ -193,13 +197,12 @@ If the program fails, check the three `BRINE_*` variables, YAML indentation, uni
 
 ## Limits and current status
 
-The graph is a fixed dataset and may be incomplete or contain mistakes. Different common names, scientific names, abbreviations, and ecological terms can also affect retrieval. Finding no matching record is not proof that an ecological relationship does not exist. Readers should check cited edges, especially for mixed, null, and context-specific findings.
+The graph is a fixed dataset and may be incomplete or contain mistakes. Finding no matching record is not proof that an ecological relationship does not exist. Readers should check cited edges, especially for mixed, null, and context-specific findings.
 
-The question-processing, reasoning, and verification stages are connected to the configured model endpoint. A question may still receive a fallback answer if processing fails or verification cannot be completed.
-
-## Solution architecture diagram
-
-![CAUSA NOSTRA solution architecture](assets/proposed_method.jpg)
+- **Retrieval is the main limit.** Retrieval starts from a question frame (intervention, outcome, context, and per-side synonyms). Each graph edge is turned into a readable record that includes node labels, entity terms, ontology codes given their graph labels, the predicate, the reported outcome direction, the context, the source sentence, and up to three source spans. Three BM25 signals (subject, object, and full text) rank the records. The BM25 index lowercases and singularises words, so "grasses" and "grass" match, and only records sharing a word with the query are kept. Reciprocal rank fusion combines the signals, and the top 20 records are passed on, each with its per-signal ranks. Synonyms are still lexical, so names, abbreviations, and measurement terms can miss relevant edges. For example, "methane emissions" may not reach edges that say "methane flux". Graph-neighbour expansion is not implemented, and the verifier does not yet see the per-signal ranks. The causes of `no_evidence` on some practice questions have not yet been analysed.
+- **Reasoning output is only partly checked.** The reasoner's JSON is parsed and validated against the answer model, and citations are checked afterwards. A stricter normaliser that rejects unknown keys and citations outside the retrieved records is planned but not yet added.
+- **Model dependence.** Processing, reasoning, and verification depend on the configured model endpoint. A question may receive a fallback answer if a stage fails.
+- **Confidence is uncalibrated.** It is a rubric score and has not been checked against independently verified answers.
 
 ## Contributors
 
