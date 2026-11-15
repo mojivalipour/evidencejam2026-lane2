@@ -38,7 +38,7 @@ def answer_question(
         # Deterministic checks first: cheap, and they catch hallucinated citations.
         problems = check_entry(draft, store)
         if not problems:
-            verification = stages.verify(question, draft, records)
+            verification = stages.verify(question, frame, draft, records)
             if verification.passed:
                 return draft
             problems = verification.problems or ["verification failed"]

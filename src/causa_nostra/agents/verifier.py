@@ -1,48 +1,42 @@
 """Agent 3: verification.
 
-The LLM returns a per-criterion judgement (pass / partial / fail), short problem
-notes, and supporting edge IDs. The pass/fail decision and the weighted score are
-computed here in Python, not by the model.
-
-Rubric weights follow the project instructions: evidence match 30%, direction and
-causal language 30%, citation support 25%, search coverage 15%.
+The LLM judges each rubric sub-item (pass / partial / fail) and returns short problem
+notes and supporting edge IDs. Category judgements, gates, the score, and `passed` are
+computed in `causa_nostra.answers.rubric`, which is the single source of truth.
 """
 
 from __future__ import annotations
 
 from causa_nostra.agents.base import Agent, ChatClient
 from causa_nostra.answers.models import AnswerEntry
-from causa_nostra.answers.rubric import ANSWERED_WEIGHTS, JUDGEMENT_VALUE, weighted_score
-from causa_nostra.pipeline.types import Question, Verification
+from causa_nostra.answers.rubric import (
+    ANSWERED_QUESTIONS,
+    IRRELEVANT_GUIDANCE,
+    JUDGEMENT_CHOICES,
+    evaluate_answered,
+    rubric_score,
+)
+from causa_nostra.pipeline.types import Question, QuestionFrame, Verification
 from causa_nostra.retrieval.records import EvidenceRecord
 
-# Criteria whose failure requires correction regardless of other scores.
-REQUIRED_CRITERIA = ("direction_and_causal_language", "citation_support")
-
-# Prompt wording for each rubric criterion. Names and order come from ANSWERED_WEIGHTS;
-# build_system_prompt() fails if a rubric criterion has no description here.
-CRITERION_GUIDE: dict[str, str] = {
-    "evidence_match": "the cited records match both the intervention and the outcome, and the requested context.",
-    "direction_and_causal_language": "the direction, null findings, and causal wording match the records.",
-    "citation_support": "every factual claim in the answer is supported by a cited record.",
-    "search_coverage": "the records are plausibly enough to answer the question, or a no_evidence answer is justified.",
-}
+__all__ = ["SYSTEM_PROMPT", "Verifier", "build_system_prompt", "rubric_score"]
 
 
-def build_system_prompt() -> str:
-    """Build the verifier prompt from the rubric's criteria and judgement values."""
-    missing = set(ANSWERED_WEIGHTS) - set(CRITERION_GUIDE)
-    if missing:
-        raise ValueError(f"no prompt description for rubric criteria: {sorted(missing)}")
-    judgement_choices = ", ".join(f'"{j}"' for j in JUDGEMENT_VALUE)
-    criteria_lines = "\n".join(f'- "{name}": {CRITERION_GUIDE[name]}' for name in ANSWERED_WEIGHTS)
+def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTIONS) -> str:
+    """Build the verifier prompt from the rubric's sub-items and judgement choices."""
+    choices = ", ".join(f'"{choice}"' for choice in JUDGEMENT_CHOICES)
+    sections = "\n\n".join(
+        f"{category}:\n" + "\n".join(f'- "{item}": {text}' for item, text in items.items())
+        for category, items in questions.items()
+    )
+    item_ids = ", ".join(f'"{item}"' for category in questions.values() for item in category)
     return (
         "You verify a draft answer against the evidence records it cites.\n"
-        f"Judge each criterion as {judgement_choices}:\n"
-        f"{criteria_lines}\n\n"
+        f"Judge each item as {choices}. Use only the records; do not add outside knowledge.\n"
+        f"{IRRELEVANT_GUIDANCE}\n\n"
+        f"{sections}\n\n"
         "Return ONLY a JSON object with these keys:\n"
-        f'- "criteria": object mapping each of the {len(ANSWERED_WEIGHTS)} criterion names above '
-        f"to {judgement_choices}.\n"
+        f'- "items": object mapping each of these ids to {choices}: {item_ids}.\n'
         '- "problems": list of short strings describing each concrete problem. Empty list if none.\n'
         '- "supporting_edge_ids": list of edge_ids from the records that bear on the question.'
     )
@@ -51,58 +45,48 @@ def build_system_prompt() -> str:
 SYSTEM_PROMPT = build_system_prompt()
 
 
-def rubric_score(criteria: dict[str, str]) -> float:
-    """Weighted score in [0, 1] from per-criterion judgements. Missing criteria count as fail."""
-    judgements = {name: criteria.get(name, "fail") for name in ANSWERED_WEIGHTS}
-    return weighted_score(judgements, ANSWERED_WEIGHTS)
-
-
-def _judgements(raw: object) -> dict[str, str]:
-    if not isinstance(raw, dict):
-        return {}
-    return {
-        name: str(value).lower()
-        for name, value in raw.items()
-        if name in ANSWERED_WEIGHTS and str(value).lower() in JUDGEMENT_VALUE
-    }
-
-
 class Verifier(Agent):
     """Structured judgement over short inputs: reasoning is switched off for speed and energy."""
 
     def __init__(self, client: ChatClient, *, max_tokens: int = 1024) -> None:
         super().__init__(client, max_tokens=max_tokens, thinking=False)
 
-    def run(self, question: Question, draft: AnswerEntry, records: list[EvidenceRecord]) -> Verification:
+    def run(
+        self,
+        question: Question,
+        frame: QuestionFrame,
+        draft: AnswerEntry,
+        records: list[EvidenceRecord],
+    ) -> Verification:
         by_id = {r.edge_id: r for r in records}
         cited_text = "\n".join(f"[{e}] {by_id[e].text}" for e in draft.edge_ids if e in by_id) or "(none)"
+        retrieved_text = "\n".join(f"[{r.edge_id}] {r.text}" for r in records) or "(none)"
         user = (
             f"Question: {question.question}\n"
+            f"Processed intervention: {frame.intervention}\n"
+            f"Processed outcome: {frame.outcome}\n"
+            f"Processed context: {', '.join(frame.context) if frame.context else '(none)'}\n"
             f"Draft status: {draft.status}\n"
             f"Draft answer: {draft.answer}\n"
             f"Draft direction: {draft.direction}\n"
             f"Draft certainty: {draft.certainty}\n"
-            f"Cited records:\n{cited_text}\n"
+            f"Cited records:\n{cited_text}\n\n"
+            f"Retrieved records (top k):\n{retrieved_text}\n"
         )
         data = self._ask_json(SYSTEM_PROMPT, user)
 
-        criteria = _judgements(data.get("criteria"))
+        raw_items = data.get("items")
+        result = evaluate_answered(raw_items if isinstance(raw_items, dict) else {})
         raw_problems = data.get("problems")
         problems = [str(p).strip() for p in raw_problems if str(p).strip()] if isinstance(raw_problems, list) else []
         raw_supporting = data.get("supporting_edge_ids")
         supporting = [e for e in raw_supporting if isinstance(e, str) and e in by_id] if isinstance(raw_supporting, list) else []
 
-        # Missing or invalid judgements count as fail, so the verifier cannot pass by omission.
-        for name in ANSWERED_WEIGHTS:
-            criteria.setdefault(name, "fail")
-        # Any failed criterion that requires correction, or failed evidence match, fails the draft.
-        failed = [name for name, value in criteria.items() if value == "fail"]
-        passed = not any(name in failed for name in (*REQUIRED_CRITERIA, "evidence_match"))
-        if not passed and not problems:
-            problems = [f"criteria failed: {', '.join(failed)}"]
+        if not result.passed and not problems:
+            problems = [f"gated items failed: {', '.join(result.failed_gates)}"]
         return Verification(
-            passed=passed,
-            criteria=criteria,
+            passed=result.passed,
+            criteria=result.criteria,
             problems=problems,
             supporting_edge_ids=supporting,
         )
@@ -119,7 +103,12 @@ if __name__ == "__main__":
                         direction="unclear", confidence=0.3, certainty="very_low", edge_ids=[record.edge_id])
     client = LLMClient(LLMSettings.from_env())
     try:
-        verification = Verifier(client).run(Question(id="demo", question="demo"), draft, [record])
+        verification = Verifier(client).run(
+            Question(id="demo", question="demo"),
+            QuestionFrame(question_id="demo", intervention=record.subject_label, outcome=record.object_label),
+            draft,
+            [record],
+        )
         print(verification.model_dump_json(indent=2))
         print(f"rubric score: {rubric_score(verification.criteria):.2f}")
     finally:

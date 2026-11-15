@@ -60,7 +60,7 @@ def build_placeholder_stages(store: GraphStore, top_k: int = 20) -> Stages:
             searched_for=f"keyword search over edge records for terms: {', '.join(frame.search_terms)}",
         )
 
-    def verify(question: Question, draft: AnswerEntry, records: list[EvidenceRecord]) -> Verification:
+    def verify(question: Question, frame: QuestionFrame, draft: AnswerEntry, records: list[EvidenceRecord]) -> Verification:
         return Verification(passed=True, criteria={}, problems=[])
 
     return Stages(understand=understand, retrieve=retrieve, reason=reason, verify=verify)

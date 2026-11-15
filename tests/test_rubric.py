@@ -1,0 +1,112 @@
+"""Rubric tests: rubric.py is the single source of truth for scoring and gates."""
+
+from __future__ import annotations
+
+import pytest
+
+from causa_nostra.agents.verifier import SYSTEM_PROMPT
+from causa_nostra.answers.rubric import (
+    ANSWERED_QUESTIONS,
+    ANSWERED_WEIGHTS,
+    NO_EVIDENCE_GATE_QUESTIONS,
+    evaluate_answered,
+    evaluate_no_evidence,
+    normalise,
+    rubric_score,
+)
+
+
+def _all(judgement: str, questions: dict[str, dict[str, str]]) -> dict[str, str]:
+    return {item: judgement for category in questions.values() for item in category}
+
+
+def test_all_pass_scores_one_and_passes() -> None:
+    result = evaluate_answered(_all("pass", ANSWERED_QUESTIONS))
+    assert result.score == pytest.approx(1.0)
+    assert result.passed
+
+
+def test_partial_sub_item_downgrades_category_only() -> None:
+    items = _all("pass", ANSWERED_QUESTIONS) | {"D4": "partial"}
+    result = evaluate_answered(items)
+    assert result.criteria["search_coverage"] == "partial"
+    assert result.score == pytest.approx(0.925)
+    assert result.passed
+
+
+def test_failed_citation_gates_even_with_high_score() -> None:
+    items = _all("pass", ANSWERED_QUESTIONS) | {"C1": "fail"}
+    result = evaluate_answered(items)
+    assert result.score > 0.7
+    assert "C1" in result.failed_gates
+    assert not result.passed
+
+
+def test_failed_search_item_does_not_gate() -> None:
+    items = _all("pass", ANSWERED_QUESTIONS) | {"D1": "fail"}
+    result = evaluate_answered(items)
+    assert result.criteria["search_coverage"] == "fail"
+    assert result.passed
+
+
+def test_missing_and_invalid_items_count_as_fail() -> None:
+    items = _all("pass", ANSWERED_QUESTIONS)
+    del items["B2"]
+    items["A1"] = "maybe"
+    result = evaluate_answered(items)
+    assert result.items["B2"] == "fail"
+    assert result.items["A1"] == "fail"
+    assert not result.passed
+
+
+def test_normalise_lowercases_and_rejects_unknown() -> None:
+    assert normalise(" PASS ") == "pass"
+    assert normalise("yes") == "fail"
+
+
+def test_irrelevant_item_is_not_scored_or_gated() -> None:
+    items = _all("pass", ANSWERED_QUESTIONS) | {"A4": "irrelevant", "D4": "irrelevant"}
+    result = evaluate_answered(items)
+    assert result.items["A4"] == "irrelevant"
+    assert result.criteria["evidence_match"] == "pass"
+    assert result.score == pytest.approx(1.0)
+    assert result.passed
+
+
+def test_fully_irrelevant_category_is_dropped_from_score() -> None:
+    items = _all("pass", ANSWERED_QUESTIONS) | {"D1": "irrelevant", "D2": "irrelevant",
+                                                "D3": "irrelevant", "D4": "irrelevant"}
+    result = evaluate_answered(items)
+    assert result.criteria["search_coverage"] == "irrelevant"
+    assert result.score == pytest.approx(1.0)
+
+
+def test_citation_item_cannot_be_irrelevant() -> None:
+    items = _all("pass", ANSWERED_QUESTIONS) | {"C2": "irrelevant"}
+    result = evaluate_answered(items)
+    assert result.items["C2"] == "fail"
+    assert "C2" in result.failed_gates
+    assert not result.passed
+
+
+def test_unknown_word_is_still_fail() -> None:
+    items = _all("pass", ANSWERED_QUESTIONS) | {"A1": "not applicable"}
+    assert evaluate_answered(items).items["A1"] == "fail"
+
+
+def test_rubric_score_missing_categories_count_as_fail() -> None:
+    assert rubric_score({name: "pass" for name in ANSWERED_WEIGHTS}) == pytest.approx(1.0)
+    assert rubric_score({}) == pytest.approx(0.0)
+
+
+def test_no_evidence_gate_on_absence_claim() -> None:
+    items = {"N1": "pass", "N2": "pass", "N3": "pass", "N4": "pass", "N5": "pass", "N6": "fail"}
+    result = evaluate_no_evidence(items)
+    assert result.score == pytest.approx(1.0)
+    assert result.failed_gates == ("N6",)
+    assert not result.passed
+
+
+def test_prompt_contains_every_answered_sub_item() -> None:
+    for item in (item for category in ANSWERED_QUESTIONS.values() for item in category):
+        assert f'"{item}"' in SYSTEM_PROMPT

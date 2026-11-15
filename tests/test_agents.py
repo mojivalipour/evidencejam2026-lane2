@@ -6,6 +6,7 @@ import pytest
 
 from causa_nostra.agents import AgentOutputError, QuestionProcessor, Reasoner, Verifier, parse_json_object, rubric_score
 from causa_nostra.answers.models import AnswerEntry
+from causa_nostra.answers.rubric import ANSWERED_QUESTIONS
 from causa_nostra.llm.client import ChatResult
 from causa_nostra.pipeline.types import Question, QuestionFrame
 from causa_nostra.retrieval.records import EvidenceRecord
@@ -31,6 +32,7 @@ def _record(edge_id: str = "e1", negated: bool = False) -> EvidenceRecord:
 
 
 QUESTION = Question(id="H-1", question="What does burning do to non-native grass cover?")
+FRAME = QuestionFrame(question_id="H-1", intervention="burning", outcome="grass cover")
 
 
 # --- base parsing -----------------------------------------------------------
@@ -97,32 +99,36 @@ def _draft() -> AnswerEntry:
                        confidence=0.7, certainty="low", edge_ids=["e1"])
 
 
-def test_verifier_passes_when_no_required_criterion_fails():
+def _items(**overrides: str) -> dict[str, str]:
+    base = {item: "pass" for category in ANSWERED_QUESTIONS.values() for item in category}
+    return base | overrides
+
+
+def test_verifier_passes_when_no_gated_item_fails():
     reply = json.dumps({
-        "criteria": {"evidence_match": "pass", "direction_and_causal_language": "pass",
-                     "citation_support": "partial", "search_coverage": "partial"},
+        "items": _items(D4="partial"),
         "problems": [], "supporting_edge_ids": ["e1", "made_up"],
     })
-    result = Verifier(FakeClient(reply)).run(QUESTION, _draft(), [_record()])
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is True
     assert result.supporting_edge_ids == ["e1"]
 
 
 def test_verifier_fails_on_wrong_direction():
     reply = json.dumps({
-        "criteria": {"evidence_match": "pass", "direction_and_causal_language": "fail",
-                     "citation_support": "pass", "search_coverage": "pass"},
+        "items": _items(B1="fail"),
         "problems": ["draft says decrease, record is increase"],
     })
-    result = Verifier(FakeClient(reply)).run(QUESTION, _draft(), [_record()])
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is False
     assert result.problems == ["draft says decrease, record is increase"]
 
 
-def test_verifier_missing_criteria_count_as_fail():
-    result = Verifier(FakeClient(json.dumps({"criteria": {}, "problems": []}))).run(QUESTION, _draft(), [_record()])
+def test_verifier_missing_items_count_as_fail():
+    result = Verifier(FakeClient(json.dumps({"items": {}, "problems": []}))).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is False
     assert result.criteria["citation_support"] == "fail"
+
 
 
 def test_rubric_score_is_weighted_in_python():

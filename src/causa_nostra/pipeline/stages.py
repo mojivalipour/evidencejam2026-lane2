@@ -25,8 +25,8 @@ Understand = Callable[[Question], QuestionFrame]
 Retrieve = Callable[[QuestionFrame], list[EvidenceRecord]]
 # Reason: question, frame, records, feedback from a failed verification -> draft
 Reason = Callable[[Question, QuestionFrame, list[EvidenceRecord], list[str]], AnswerEntry]
-# Verify: question, draft, records -> verification
-Verify = Callable[[Question, AnswerEntry, list[EvidenceRecord]], Verification]
+# Verify: question, frame, draft, retrieved records (top k) -> verification
+Verify = Callable[[Question, QuestionFrame, AnswerEntry, list[EvidenceRecord]], Verification]
 
 
 @dataclass(frozen=True)

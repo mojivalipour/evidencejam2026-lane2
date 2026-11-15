@@ -26,7 +26,7 @@ def _stages(reason) -> Stages:
         understand=lambda q: QuestionFrame(question_id=q.id, intervention="S", outcome="O"),
         retrieve=lambda frame: [],
         reason=reason,
-        verify=lambda q, d, r: Verification(passed=True),
+        verify=lambda q, f, d, r: Verification(passed=True),
     )
 
 
