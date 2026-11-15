@@ -49,7 +49,8 @@ def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTION
         "Return ONLY a JSON object with these keys:\n"
         f'- "items": object mapping each of these ids to {choices}: {item_ids}.\n'
         '- "problems": list of short strings describing each concrete problem. Empty list if none.\n'
-        '- "supporting_edge_ids": list of edge_ids from the records that bear on the question.'
+        '- "supporting_edge_ids": list of edge_ids that directly answer BOTH the intervention and the outcome '
+        "(and the requested context). Exclude edges that relate to only one side of the question."
     )
 
 
@@ -108,7 +109,14 @@ class Verifier(Agent):
         raw_problems = data.get("problems")
         problems = [str(p).strip() for p in raw_problems if str(p).strip()] if isinstance(raw_problems, list) else []
         raw_supporting = data.get("supporting_edge_ids")
-        supporting = [e for e in raw_supporting if isinstance(e, str) and e in by_id] if isinstance(raw_supporting, list) else []
+        # Only edges that matched both the intervention and the outcome count as supporting.
+        # A one-sided candidate (e.g. the right outcome, a different intervention) must not block a valid no_evidence.
+        both_sided = {r.edge_id for r in records if {"subject", "object"} <= set(r.retrieval_ranks)}
+        supporting = (
+            [e for e in raw_supporting if isinstance(e, str) and e in by_id and e in both_sided]
+            if isinstance(raw_supporting, list)
+            else []
+        )
 
         passed = result.passed
         if not answered and supporting:

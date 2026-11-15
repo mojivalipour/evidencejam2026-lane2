@@ -28,6 +28,7 @@ def _record(edge_id: str = "e1", negated: bool = False) -> EvidenceRecord:
         subject_qualifier=None, object_qualifier=None, predicate="reduces", causal_language="direct_causal",
         negated=negated, relation_sign="negative", source_document="d1", original_sentence="Burning reduced grass.",
         ecosystem_context=None, certainty_grade=None, text=f"subject: burning | predicate: reduces | object: grass cover [{edge_id}]",
+        retrieval_ranks={"subject": 1, "object": 1},  # matched both sides by default
     )
 
 
@@ -207,12 +208,22 @@ def test_verifier_no_evidence_missing_items_fail():
 
 
 def test_verifier_no_evidence_cannot_pass_when_it_names_supporting_edges():
-    # Regression: all items passed, yet the verifier listed edges that bear on the question.
+    # Regression: all items passed, yet the verifier listed an edge that matched both sides.
     reply = json.dumps({"items": _N_PASS, "problems": [], "supporting_edge_ids": ["e1"]})
-    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _no_evidence_draft(), [_record()])
+    both = _record().model_copy(update={"retrieval_ranks": {"subject": 1, "object": 2}})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _no_evidence_draft(), [both])
     assert result.passed is False
     assert result.supporting_edge_ids == ["e1"]
     assert "bear on the question" in result.problems[0]
+
+
+def test_verifier_no_evidence_ignores_one_sided_candidates():
+    # An edge that matched only one side (e.g. the right outcome, another intervention) is not supporting evidence.
+    reply = json.dumps({"items": _N_PASS, "problems": [], "supporting_edge_ids": ["e1"]})
+    one_sided = _record().model_copy(update={"retrieval_ranks": {"object": 1}})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _no_evidence_draft(), [one_sided])
+    assert result.passed is True
+    assert result.supporting_edge_ids == []
 
 
 def test_verifier_receives_structured_metadata_and_search_log():

@@ -24,6 +24,14 @@ class DraftRejected(RuntimeError):
     """A draft still cites unknown edges after the allowed revisions."""
 
 
+CORRECTNESS_CRITERIA = ("interpretation", "evidence_match", "direction_and_causal_language", "citation_support")
+
+
+def _correctness_failed(verification: Verification) -> bool:
+    """True if any correctness gate is not a clean pass. Such drafts never reach the unverified path."""
+    return any(verification.criteria.get(name, "pass") != "pass" for name in CORRECTNESS_CRITERIA)
+
+
 def _verification_feedback(verification: Verification) -> list[str]:
     """Feedback for the reasoner's revision: what failed, which edges bear on the question, and why."""
     feedback = list(verification.problems) or ["verification failed"]
@@ -90,7 +98,7 @@ def answer_question(
                     draft = draft.model_copy(update={"confidence": verification.score})
                 stage_info(qid, "done", "accepted after %d attempt(s)", attempt + 1)
                 return draft
-            if draft.status == "answered" and draft.edge_ids:
+            if draft.status == "answered" and draft.edge_ids and not _correctness_failed(verification):
                 unverified = draft.model_copy(update={"confidence": verification.score or 0.0})
             problems = _verification_feedback(verification)
         if attempt == max_revisions:
