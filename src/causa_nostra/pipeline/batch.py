@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -156,7 +157,7 @@ def run_batch(
     output = Path(output_path)
     evidence_dir = output.parent / f"{output.stem}_evidence"
 
-    for question in questions:
+    for index, question in enumerate(questions, start=1):
         try:
             entry, repairs = _answer_with_retry(question, store, stages, repo_root, max_revisions)
             warnings.extend(repairs)
@@ -166,6 +167,8 @@ def run_batch(
             entry = fallback_entry(question.id, f"{type(exc).__name__}: {exc}")
         entry = attach_evidence(entry, store, evidence_dir, repo_root)
         entries[question.id] = entry
+        # Progress goes to stderr so it never mixes with the answers file.
+        print(f"[{index}/{len(questions)}] {question.id} {entry.status}", file=sys.stderr, flush=True)
 
         partial = AnswersFile(answers=[entries[q.id] for q in questions if q.id in entries])
         write_answers_atomic(output_path, partial)

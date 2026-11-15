@@ -92,6 +92,9 @@ class EvidenceRecord(BaseModel):
     ecosystem_context: str | None
     certainty_grade: str | None
     text: str
+    # Set per question by retrieval: the 1-based rank of this edge in each signal
+    # (e.g. {"subject": 3, "object": 12, "fulltext": 1}). Empty for unretrieved records.
+    retrieval_ranks: dict[str, int] = {}
 
 
 def curie_labels(store: GraphStore) -> dict[str, str]:
