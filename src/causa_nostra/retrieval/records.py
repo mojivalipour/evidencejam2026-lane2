@@ -23,6 +23,9 @@ from causa_nostra.graph.store import GraphStore
 _CURIE = r"(?:wd|ENVO|PATO|CHEBI|GO|NCBITaxon):[A-Za-z0-9_]+"
 _LABELLED_CURIE = re.compile(rf"([^|:()]+?) \(({_CURIE})\)")
 _BARE_CURIE = re.compile(rf"(?<![(\w])({_CURIE})(?![\w)])")
+# Edge source spans added to the indexed text: at most this many, each clipped to this many characters.
+MAX_SPANS = 3
+MAX_SPAN_CHARS = 300
 
 # The object node's qualifier is the state the edge reports for the outcome. That
 # state is not the effect on its own: "increased X prevents increased Y" reports
@@ -97,6 +100,28 @@ class EvidenceRecord(BaseModel):
     retrieval_ranks: dict[str, int] = {}
 
 
+def _readable(value: str | None) -> str:
+    """Enum-style code as words: 'management_intervention' -> 'management intervention'."""
+    return (value or "").replace("_", " ").strip()
+
+
+def evidence_span_text(edge: Edge) -> str:
+    """The edge's own source-span text, whitespace-normalised, clipped, deduplicated and joined for indexing.
+
+    The original sentence is skipped here because it is already indexed on its own.
+    """
+    seen: list[str] = []
+    original = " ".join((edge.original_sentence or "").split())
+    for span in edge.source_spans:
+        raw = span.get("text") if isinstance(span, dict) else None
+        text = " ".join(str(raw or "").split())[:MAX_SPAN_CHARS]
+        if text and text != original and text not in seen:
+            seen.append(text)
+        if len(seen) == MAX_SPANS:
+            break
+    return " / ".join(seen)
+
+
 def curie_labels(store: GraphStore) -> dict[str, str]:
     """Map each ontology code to the label the graph most often writes beside it."""
     seen: dict[str, Counter[str]] = defaultdict(Counter)
@@ -132,18 +157,24 @@ def build_record(edge: Edge, store: GraphStore, labels: dict[str, str] | None = 
 
     null_tag = " NULL RESULT (no relationship found)" if edge.negated else ""
     context = (edge.ecosystem_context or "").replace("_", " ")
+    subject_type = _readable(subject.entity_type)
+    object_type = _readable(obj.entity_type)
+    spans = evidence_span_text(edge)
     text = " | ".join(
         part
         for part in (
             f"subject: {subject_label}",
+            f"subject type: {subject_type}" if subject_type else "",
             "note: subject is a reduction or removal of the driver" if reduction else "",
             f"predicate: {edge.predicate} [{edge.causal_language}]{null_tag}",
             f"object: {object_label}",
+            f"object type: {object_type}" if object_type else "",
             f"reported outcome state: {obj.state_or_change_qualifier}" if obj.state_or_change_qualifier else "",
             f"outcome direction: {direction}",
             f"ambiguity: {ambiguity}" if ambiguity else "",
             f"context: {context}" if context else "",
             f"sentence: {edge.original_sentence}" if edge.original_sentence else "",
+            f"source text: {spans}" if spans else "",
         )
         if part
     )
