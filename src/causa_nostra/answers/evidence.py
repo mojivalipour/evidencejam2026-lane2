@@ -95,6 +95,21 @@ def render_rubric_html(entry: AnswerEntry, verification: Verification) -> str:
     problems = "".join(f"<li>{esc(p)}</li>" for p in verification.problems) or "<li>None</li>"
     supporting = ", ".join(verification.supporting_edge_ids) or "none"
     score = "n/a" if verification.score is None else f"{verification.score:.3f}"
+    # The same fields for every status, so answered and no_evidence pages are read the same way.
+    draft_fields = {
+        "Status": entry.status,
+        "Answer": entry.answer,
+        "Direction": entry.direction or "(null)",
+        "Certainty": entry.certainty or "(null)",
+        "Confidence": f"{entry.confidence:.2f}",
+        "Cited edge_ids": ", ".join(entry.edge_ids) or "none",
+        "Searched for": entry.searched_for or "(null)",
+    }
+    draft_table = (
+        "<table><tbody>"
+        + "".join(f"<tr><th>{esc(k)}</th><td>{esc(v)}</td></tr>" for k, v in draft_fields.items())
+        + "</tbody></table>"
+    )
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"<title>{esc(entry.id)} rubric</title>"
@@ -103,6 +118,8 @@ def render_rubric_html(entry: AnswerEntry, verification: Verification) -> str:
         f"<h1>{esc(entry.id)} rubric</h1>"
         f"<p><b>Status:</b> {esc(entry.status)} &nbsp; <b>Verifier passed:</b> {verification.passed} "
         f"&nbsp; <b>Rubric score:</b> {score}</p>"
+        "<h2>Reasoner answer (returned draft)</h2>"
+        f"{draft_table}"
         "<h2>Sub-item judgements</h2>"
         f"{items_table}"
         "<h2>Category totals</h2>"
