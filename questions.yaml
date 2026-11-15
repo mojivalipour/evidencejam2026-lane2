@@ -70,3 +70,103 @@ questions:
       Where restoration sites face several stressors at once (for example deer
       browsing plus competing vegetation, harvesting plus drought, or repeated
       fires), do the stressors interact, and which one most limits recovery?
+
+  - id: Q01
+    kind: positive_direct
+    question: >-
+      Does fertilization alone increase absolute height growth in white spruce seedlings?
+
+  - id: Q02
+    kind: negative_direct_taxonomic_synonym
+    question: >-
+      Does clipping reduce crested wheatgrass (Agropyron cristatum) cover?
+
+  - id: Q03
+    kind: explicit_null
+    question: >-
+      Does fertilization alone significantly affect survival of white spruce seedlings?
+
+  - id: Q04
+    kind: explicit_null_abbreviation
+    question: >-
+      Does scarification significantly increase GLD (ground-level diameter) of tamarack?
+
+  - id: Q05
+    kind: context_significance_heterogeneity
+    question: >-
+      Does seeding method affect native plant cover consistently in Valley plots seeded in 1994 versus 1996?
+
+  - id: Q06
+    kind: temporal_effect_vs_null
+    question: >-
+      Does scarification consistently reduce soil phosphorus concentrations in both 2001 and 2003?
+
+  - id: Q07
+    kind: opposing_effects_conditional
+    question: >-
+      Does installing treeshelters consistently increase diameter growth of silver maple (Acer saccharinum) regardless of soil moisture?
+
+  - id: Q08
+    kind: association_not_causation
+    question: >-
+      Does grazing increase belowground biomass in the studied marsh?
+
+  - id: Q09
+    kind: negative_direct
+    question: >-
+      Does peatland restoration reduce evaporation relative to unrestored plots?
+
+  - id: Q10
+    kind: negative_direct
+    question: >-
+      Does prescribed fire treatment reduce percent canopy cover?
+
+  - id: Q11
+    kind: positive_direct
+    question: >-
+      Does applying native hay increase western wheatgrass cover relative to the seeded right-of-way?
+
+  - id: Q12
+    kind: positive_direct
+    question: >-
+      Does herbicide application increase 15th-year leader growth in black spruce?
+
+  - id: Q13
+    kind: positive_association
+    question: >-
+      Is a higher water table associated with greater graminoid cover in restored peatland plots?
+
+  - id: Q14
+    kind: age_context_significance_heterogeneity
+    question: >-
+      Does cover soil type affect ectomycorrhizal fungal community composition equally in young and four-year-old seedlings?
+
+  - id: Q15
+    kind: null_outcome_distractor
+    question: >-
+      Does native hay application significantly increase total native species cover compared with the seeded right-of-way in year two?
+
+  - id: Q16
+    kind: prevents_semantics
+    question: >-
+      Does peatland restoration prevent soil-water pressure at 5 cm depth from falling below -100 mb?
+
+  - id: Q17
+    kind: no_evidence_outcome_mismatch
+    question: >-
+      Does fertilization alone increase root length in white spruce seedlings?
+
+  - id: Q18
+    kind: no_evidence_intervention_mismatch
+    question: >-
+      Does clipping improve survival of white spruce seedlings?
+
+  - id: Q19
+    kind: no_evidence_random
+    question: >-
+      Does prescribed fire increase beluga whale calf survival?
+
+  - id: Q20
+    kind: no_evidence_outcome_mismatch
+    question: >-
+      Does applying native hay reduce methane emissions from restored peatlands?
