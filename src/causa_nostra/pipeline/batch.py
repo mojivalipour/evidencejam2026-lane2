@@ -19,6 +19,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from causa_nostra.answers.models import AnswerEntry, AnswersFile, TEAM_NAME
+from causa_nostra.answers.evidence import write_evidence
 from causa_nostra.answers.validate import check_extras
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.run import REPO_ROOT, DraftRejected, answer_question
@@ -82,6 +83,18 @@ def sanitize_entry(entry: AnswerEntry, store: GraphStore, repo_root: Path) -> tu
         warnings.append(f"{entry.id}: entry failed validation after repair: {exc}")
         return fallback_entry(entry.id, "entry failed validation after repair"), warnings
     return cleaned, warnings
+
+
+def attach_evidence(entry: AnswerEntry, store: GraphStore, evidence_dir: Path, repo_root: Path) -> AnswerEntry:
+    """Write the evidence page for an answered entry and list it in `extras`."""
+    try:
+        path = write_evidence(entry, store, evidence_dir, repo_root)
+    except Exception as exc:  # the page is optional: never lose the answer over it
+        log.warning("evidence page for %s not written: %s", entry.id, exc)
+        return entry
+    if path is None or path in entry.extras:
+        return entry
+    return entry.model_copy(update={"extras": [*entry.extras, path]})
 
 
 def write_answers_atomic(path: str | Path, answers: AnswersFile) -> None:
@@ -148,6 +161,7 @@ def run_batch(
             log.exception("question %s failed", question.id)
             failed.append(question.id)
             entry = fallback_entry(question.id, f"{type(exc).__name__}: {exc}")
+        entry = attach_evidence(entry, store, Path(output_path).parent / "evidence", repo_root)
         entries[question.id] = entry
 
         partial = AnswersFile(answers=[entries[q.id] for q in questions if q.id in entries])
