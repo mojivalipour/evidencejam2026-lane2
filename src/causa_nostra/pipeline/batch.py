@@ -139,10 +139,10 @@ if __name__ == "__main__":
     # Demo: run one question through the agents with the real endpoint, into a temp file.
     import tempfile
 
-    from causa_nostra.agents.stages import build_agent_stages
     from causa_nostra.graph.store import GraphStore
     from causa_nostra.llm.client import LLMClient, LLMSettings
     from causa_nostra.pipeline.questions import load_questions
+    from causa_nostra.pipeline.stages import build_agent_stages
 
     store = GraphStore.from_json("causal_graph.json")
     questions = load_questions("questions.yaml")[:1]

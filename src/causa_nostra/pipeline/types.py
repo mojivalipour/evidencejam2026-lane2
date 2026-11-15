@@ -26,9 +26,12 @@ class Verification(BaseModel):
     """Output of Verify. Semantic judgements come from the verifier LLM."""
 
     passed: bool
-    criteria: dict[str, str] = Field(default_factory=dict)  # criterion -> pass|partial|fail
+    criteria: dict[str, str] = Field(default_factory=dict)  # criterion -> pass|partial|fail|irrelevant
     problems: list[str] = Field(default_factory=list)
     supporting_edge_ids: list[str] = Field(default_factory=list)
+    # Deterministic rubric score for the verified draft's status (answered or no_evidence rubric).
+    # None when the verifier produced no rubric result (for example, placeholder stages).
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 if __name__ == "__main__":

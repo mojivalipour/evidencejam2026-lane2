@@ -6,6 +6,7 @@ import pytest
 
 from causa_nostra.agents import AgentOutputError, QuestionProcessor, Reasoner, Verifier, parse_json_object, rubric_score
 from causa_nostra.answers.models import AnswerEntry
+from causa_nostra.answers.rubric import ANSWERED_QUESTIONS
 from causa_nostra.llm.client import ChatResult
 from causa_nostra.pipeline.types import Question, QuestionFrame
 from causa_nostra.retrieval.records import EvidenceRecord
@@ -31,6 +32,7 @@ def _record(edge_id: str = "e1", negated: bool = False) -> EvidenceRecord:
 
 
 QUESTION = Question(id="H-1", question="What does burning do to non-native grass cover?")
+FRAME = QuestionFrame(question_id="H-1", intervention="burning", outcome="grass cover")
 
 
 # --- base parsing -----------------------------------------------------------
@@ -97,32 +99,56 @@ def _draft() -> AnswerEntry:
                        confidence=0.7, certainty="low", edge_ids=["e1"])
 
 
-def test_verifier_passes_when_no_required_criterion_fails():
+def _items(**overrides: str) -> dict[str, str]:
+    base = {item: "pass" for category in ANSWERED_QUESTIONS.values() for item in category}
+    return base | overrides
+
+
+def test_verifier_passes_when_no_gated_item_fails():
     reply = json.dumps({
-        "criteria": {"evidence_match": "pass", "direction_and_causal_language": "pass",
-                     "citation_support": "partial", "search_coverage": "partial"},
+        "items": _items(D4="partial"),
         "problems": [], "supporting_edge_ids": ["e1", "made_up"],
     })
-    result = Verifier(FakeClient(reply)).run(QUESTION, _draft(), [_record()])
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is True
     assert result.supporting_edge_ids == ["e1"]
 
 
 def test_verifier_fails_on_wrong_direction():
     reply = json.dumps({
-        "criteria": {"evidence_match": "pass", "direction_and_causal_language": "fail",
-                     "citation_support": "pass", "search_coverage": "pass"},
+        "items": _items(B1="fail"),
         "problems": ["draft says decrease, record is increase"],
     })
-    result = Verifier(FakeClient(reply)).run(QUESTION, _draft(), [_record()])
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is False
     assert result.problems == ["draft says decrease, record is increase"]
 
 
-def test_verifier_missing_criteria_count_as_fail():
-    result = Verifier(FakeClient(json.dumps({"criteria": {}, "problems": []}))).run(QUESTION, _draft(), [_record()])
+def test_verifier_missing_items_count_as_fail():
+    result = Verifier(FakeClient(json.dumps({"items": {}, "problems": []}))).run(QUESTION, FRAME, _draft(), [_record()])
     assert result.passed is False
     assert result.criteria["citation_support"] == "fail"
+
+
+def test_verifier_gate_failure_without_problems_gets_fallback_message():
+    reply = json.dumps({"items": _items(C1="fail"), "problems": []})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
+    assert result.passed is False
+    assert result.problems == ["gated items failed: C1"]
+
+
+def test_verifier_drops_non_string_and_unknown_supporting_ids():
+    reply = json.dumps({"items": _items(), "problems": [], "supporting_edge_ids": ["e1", 3, None, "ghost"]})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
+    assert result.supporting_edge_ids == ["e1"]
+
+
+def test_verifier_non_dict_items_and_non_list_problems_are_handled():
+    reply = json.dumps({"items": ["pass"], "problems": "oops"})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
+    assert result.passed is False
+    assert result.problems[0].startswith("gated items failed: A1")
+
 
 
 def test_rubric_score_is_weighted_in_python():
@@ -131,3 +157,82 @@ def test_rubric_score_is_weighted_in_python():
     assert rubric_score(all_pass) == pytest.approx(1.0)
     assert rubric_score({**all_pass, "direction_and_causal_language": "partial"}) == pytest.approx(0.85)
     assert rubric_score({**all_pass, "search_coverage": "fail"}) == pytest.approx(0.85)
+
+
+def test_verifier_returns_rubric_score():
+    result = Verifier(FakeClient(json.dumps({"items": _items(D4="partial"), "problems": []}))).run(
+        QUESTION, FRAME, _draft(), [_record()])
+    assert result.score == pytest.approx(0.925)
+
+
+def test_verifier_intervention_mismatch_cannot_pass_as_irrelevant():
+    reply = json.dumps({"items": _items(A1="irrelevant"), "problems": []})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _draft(), [_record()])
+    assert result.passed is False
+    assert result.criteria["evidence_match"] == "fail"
+
+
+def _no_evidence_draft() -> AnswerEntry:
+    return AnswerEntry(id="H-1", status="no_evidence", answer="None found.", confidence=0.5,
+                       searched_for="burning, grass cover, fire")
+
+
+_N_PASS = {"N1": "pass", "N2": "pass", "N3": "pass", "N4": "pass", "N5": "pass", "N6": "pass"}
+
+
+def test_verifier_no_evidence_draft_uses_missing_evidence_prompt_and_rubric():
+    client = FakeClient(json.dumps({"items": _N_PASS, "problems": []}))
+    result = Verifier(client).run(QUESTION, FRAME, _no_evidence_draft(), [_record()])
+    assert result.passed is True
+    assert result.score == pytest.approx(1.0)
+    assert set(result.criteria) == {"interpretation", "search_coverage", "candidates_checked"}
+    system = client.calls[0][0]["content"]
+    assert '"N6"' in system
+    assert '"A1"' not in system
+
+
+def test_verifier_no_evidence_fails_when_evidence_was_found():
+    # N5 = fail means the search found evidence that answers the question.
+    reply = json.dumps({"items": _N_PASS | {"N5": "fail"}, "problems": ["record e1 answers the question"]})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _no_evidence_draft(), [_record()])
+    assert result.passed is False
+    assert result.problems == ["record e1 answers the question"]
+
+
+def test_verifier_no_evidence_missing_items_fail():
+    reply = json.dumps({"items": {"N6": "pass"}, "problems": []})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _no_evidence_draft(), [_record()])
+    assert result.passed is False
+    assert result.score == pytest.approx(0.0)
+
+
+def test_verifier_receives_structured_metadata_and_search_log():
+    client = FakeClient(json.dumps({"items": _items(), "problems": []}))
+    frame = QuestionFrame(question_id="H-1", intervention="burning", outcome="grass cover",
+                          search_terms=["fire", "wildfire"])
+    Verifier(client).run(QUESTION, frame, _draft(), [_record()])
+    user = client.calls[0][1]["content"]
+    assert "relation_sign: negative" in user
+    assert "source_document: d1" in user
+    assert "subject_qualifier: (none)" in user
+    assert "Executed query: burning grass cover fire wildfire" in user
+    assert "Alternative terms searched: fire, wildfire" in user
+    assert "Retrieved edge_ids (top k, ranked): e1" in user
+
+
+def test_pipeline_accepts_verified_draft_with_rubric_confidence():
+    from causa_nostra.graph.models import Graph, Node
+    from causa_nostra.graph.store import GraphStore
+    from causa_nostra.pipeline.run import answer_question
+    from causa_nostra.pipeline.stages import Stages
+    from causa_nostra.pipeline.types import Question, Verification
+
+    store = GraphStore(Graph(graph_id="t", nodes=[Node(id="S"), Node(id="O")], edges=[]))
+    stages = Stages(
+        understand=lambda q: QuestionFrame(question_id=q.id, intervention="S", outcome="O"),
+        retrieve=lambda frame: [],
+        reason=lambda q, f, r, fb: _no_evidence_draft().model_copy(update={"id": q.id}),
+        verify=lambda q, f, d, r: Verification(passed=True, score=0.85),
+    )
+    entry = answer_question(Question(id="H-1", question="q"), store, stages)
+    assert entry.confidence == pytest.approx(0.85)

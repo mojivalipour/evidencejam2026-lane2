@@ -61,6 +61,24 @@ class QuestionProcessor(Agent):
         )
 
 
+def format_frame(question: Question, frame: QuestionFrame) -> str:
+    """Readable input/output block for terminal review."""
+    width = 72
+    lines = [
+        "=" * width,
+        f"ID:            {question.id}",
+        f"INPUT:         {question.question}",
+        "-" * width,
+        f"intervention:  {frame.intervention}",
+        f"outcome:       {frame.outcome}",
+        f"context:       {', '.join(frame.context) if frame.context else '(none)'}",
+        f"search_terms ({len(frame.search_terms)}):",
+    ]
+    lines += [f"  - {term}" for term in frame.search_terms]
+    lines.append("=" * width)
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     # Demo: extract the frame for one question with the real endpoint.
     from causa_nostra.llm.client import LLMClient, LLMSettings
@@ -68,6 +86,6 @@ if __name__ == "__main__":
     client = LLMClient(LLMSettings.from_env())
     try:
         question = Question(id="demo", question="What does burning do to non-native grass cover?")
-        print(QuestionProcessor(client).run(question).model_dump_json(indent=2))
+        print(format_frame(question, QuestionProcessor(client).run(question)))
     finally:
         client.close()
