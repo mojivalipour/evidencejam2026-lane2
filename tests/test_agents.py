@@ -215,7 +215,7 @@ def test_verifier_receives_structured_metadata_and_search_log():
     assert "relation_sign: negative" in user
     assert "source_document: d1" in user
     assert "subject_qualifier: (none)" in user
-    assert "Executed query: burning grass cover fire wildfire" in user
+    assert "subject side: [burning fire wildfire] | object side: [grass cover fire wildfire]" in user
     assert "Alternative terms searched: fire, wildfire" in user
     assert "Retrieved edge_ids (top k, ranked): e1" in user
 

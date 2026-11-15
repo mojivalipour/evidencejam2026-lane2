@@ -31,18 +31,23 @@ from causa_nostra.retrieval.records import EvidenceRecord
 def side_queries(frame: QuestionFrame) -> tuple[str, str]:
     """The subject-side and object-side queries for a frame.
 
-    `QuestionFrame.search_terms` is one mixed list, so its terms are added to
-    both sides. If a frame carries `intervention_terms` / `outcome_terms`
-    (not part of `QuestionFrame` today), those are used instead, which keeps an
-    outcome synonym from matching a subject node.
+    Each side uses only its own synonyms, so an outcome synonym cannot match a
+    subject node. A frame with neither list (legacy frames carrying only the
+    mixed `search_terms`) uses those terms on both sides.
     """
-    intervention_terms = list(getattr(frame, "intervention_terms", None) or [])
-    outcome_terms = list(getattr(frame, "outcome_terms", None) or [])
+    intervention_terms = list(frame.intervention_terms)
+    outcome_terms = list(frame.outcome_terms)
     if not intervention_terms and not outcome_terms:
         intervention_terms = outcome_terms = list(frame.search_terms)
     subject_query = " ".join([frame.intervention, *intervention_terms]).strip()
     object_query = " ".join([frame.outcome, *outcome_terms]).strip()
     return subject_query, object_query
+
+
+def search_query(frame: QuestionFrame) -> str:
+    """Human-readable record of the two side queries, for the verifier's log."""
+    subject_query, object_query = side_queries(frame)
+    return f"subject side: [{subject_query}] | object side: [{object_query}]"
 
 
 def _relative_scores(index: BM25Index, query: str) -> dict[str, float]:

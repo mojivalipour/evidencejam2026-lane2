@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 
 from pydantic import BaseModel
 
-from causa_nostra.camo_rules.semantics import variable_sign
+from causa_nostra.camo_rules.semantics import NEG, POS, UNC, Polarity, predicate_polarity, variable_sign
 from causa_nostra.graph.models import Edge
 from causa_nostra.graph.store import GraphStore
 
@@ -24,24 +24,52 @@ _CURIE = r"(?:wd|ENVO|PATO|CHEBI|GO|NCBITaxon):[A-Za-z0-9_]+"
 _LABELLED_CURIE = re.compile(rf"([^|:()]+?) \(({_CURIE})\)")
 _BARE_CURIE = re.compile(rf"(?<![(\w])({_CURIE})(?![\w)])")
 
-# Outcome direction as this graph records it: the object node's qualifier holds
-# the reported outcome, whatever the predicate (also for prevents / disrupts and
-# for associated_with / correlated_with). Qualifiers not listed are "unclear".
-_OUTCOME_DIRECTION = {"increased": "increase", "decreased": "decrease", "unchanged": "stable"}
+# The object node's qualifier is the state the edge reports for the outcome. That
+# state is not the effect on its own: "increased X prevents increased Y" reports
+# Y as increased, but the predicate inhibits that increase. The effect is the
+# predicate sign times the reported outcome state (schema: FCM sign composition).
+_OUTCOME_STATE: dict[str, Polarity] = {"increased": POS, "decreased": NEG, "unchanged": UNC}
 # A subject with one of these qualifiers is a reduction or removal of the driver,
 # so the outcome direction describes what happens when the driver goes DOWN.
 _REDUCTION_QUALIFIERS = frozenset({"decreased", "absent", "removed", "terminated", "interrupted", "aborted"})
+# Wording in the source sentence that points the other way from the predicate.
+_INHIBIT_WORDS = re.compile(r"\b(?:prevent|inhibit|suppress|block|hinder|curb)")
+_PROMOTE_WORDS = re.compile(r"\b(?:caus|promot|enhanc|induc|stimulat|drive)")
 
 
-def outcome_direction(negated: bool, object_qualifier: str | None) -> str:
-    """What an edge reports about its outcome node.
+def outcome_direction(negated: bool, predicate: str, object_qualifier: str | None) -> str:
+    """Direction of the outcome effect this edge reports.
 
-    "no_effect" for a null result, otherwise "increase", "decrease", "stable"
-    (reported as unchanged) or "unclear" (no directional qualifier).
+    "no_effect" for a null result. "stable" when the outcome is reported as
+    unchanged. Otherwise the predicate sign times the reported outcome state:
+    "increase" or "decrease". "unclear" when the outcome has no reported state
+    or the predicate has no sign (associations, regulation, mediation).
     """
     if negated:
         return "no_effect"
-    return _OUTCOME_DIRECTION.get(object_qualifier, "unclear")
+    state = _OUTCOME_STATE.get(object_qualifier or "")
+    if state is None:
+        return "unclear"
+    if state is UNC:
+        return "stable"
+    sign = predicate_polarity(predicate)
+    if sign is None:
+        return "unclear"
+    return "increase" if sign.value * state.value > 0 else "decrease"
+
+
+def direction_ambiguity(predicate: str, sentence: str) -> str | None:
+    """Flag a source sentence whose wording contradicts the predicate sign.
+
+    This is a check only. A conflict is reported for review, not resolved.
+    """
+    sign = predicate_polarity(predicate)
+    text = sentence.lower()
+    if sign is POS and _INHIBIT_WORDS.search(text):
+        return "sentence uses inhibiting wording but the predicate is positive"
+    if sign is NEG and _PROMOTE_WORDS.search(text):
+        return "sentence uses promoting wording but the predicate is negative"
+    return None
 
 
 class EvidenceRecord(BaseModel):
@@ -57,6 +85,7 @@ class EvidenceRecord(BaseModel):
     negated: bool
     relation_sign: str | None  # "positive" | "negative" | None (schema sign arithmetic)
     outcome_direction: str = "unclear"  # "increase" | "decrease" | "no_effect" | "stable" | "unclear"
+    direction_ambiguity: str | None = None  # set when the sentence contradicts the predicate sign
     subject_is_reduction: bool = False
     source_document: str | None
     original_sentence: str
@@ -92,7 +121,10 @@ def build_record(edge: Edge, store: GraphStore, labels: dict[str, str] | None = 
     object_label = label_curies(obj.embedding_text or obj.name, labels)
 
     sign = variable_sign(edge, store)
-    direction = outcome_direction(edge.negated, obj.state_or_change_qualifier)
+    direction = outcome_direction(edge.negated, edge.predicate, obj.state_or_change_qualifier)
+    ambiguity = None if edge.negated else direction_ambiguity(edge.predicate, edge.original_sentence or "")
+    if ambiguity and direction in ("increase", "decrease"):
+        direction = "unclear"  # flagged for review, not labelled from the qualifier alone
     reduction = subject.state_or_change_qualifier in _REDUCTION_QUALIFIERS
 
     null_tag = " NULL RESULT (no relationship found)" if edge.negated else ""
@@ -104,7 +136,9 @@ def build_record(edge: Edge, store: GraphStore, labels: dict[str, str] | None = 
             "note: subject is a reduction or removal of the driver" if reduction else "",
             f"predicate: {edge.predicate} [{edge.causal_language}]{null_tag}",
             f"object: {object_label}",
+            f"reported outcome state: {obj.state_or_change_qualifier}" if obj.state_or_change_qualifier else "",
             f"outcome direction: {direction}",
+            f"ambiguity: {ambiguity}" if ambiguity else "",
             f"context: {context}" if context else "",
             f"sentence: {edge.original_sentence}" if edge.original_sentence else "",
         )
@@ -124,6 +158,7 @@ def build_record(edge: Edge, store: GraphStore, labels: dict[str, str] | None = 
         negated=edge.negated,
         relation_sign=None if sign is None else sign.name.lower(),
         outcome_direction=direction,
+        direction_ambiguity=ambiguity,
         subject_is_reduction=reduction,
         source_document=edge.source_document,
         original_sentence=edge.original_sentence,
@@ -154,6 +189,8 @@ def structured_text(record: EvidenceRecord) -> str:
         "relation_sign": record.relation_sign,
         "object": record.object_label,
         "object_qualifier": record.object_qualifier,
+        "outcome_direction": record.outcome_direction,
+        "direction_ambiguity": record.direction_ambiguity,
         "ecosystem_context": record.ecosystem_context,
         "certainty_grade": record.certainty_grade,
         "source_document": record.source_document,

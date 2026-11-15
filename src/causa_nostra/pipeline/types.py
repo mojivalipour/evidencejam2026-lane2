@@ -20,6 +20,8 @@ class QuestionFrame(BaseModel):
     outcome: str
     context: list[str] = Field(default_factory=list)
     search_terms: list[str] = Field(default_factory=list)  # candidates, not equivalences
+    intervention_terms: list[str] = Field(default_factory=list)  # searched on the subject side only
+    outcome_terms: list[str] = Field(default_factory=list)  # searched on the object side only
 
 
 class Verification(BaseModel):
