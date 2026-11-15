@@ -7,7 +7,7 @@ computed in `causa_nostra.answers.rubric`, which is the single source of truth.
 
 from __future__ import annotations
 
-from causa_nostra.agents.base import Agent, ChatClient
+from causa_nostra.agents.base import Agent, AgentOutputError, ChatClient
 from causa_nostra.answers.models import AnswerEntry
 from causa_nostra.answers.rubric import (
     ANSWERED_QUESTIONS,
@@ -80,8 +80,16 @@ NO_EVIDENCE_SYSTEM_PROMPT = SYSTEM_PROMPT  # one prompt for every draft
 class Verifier(Agent):
     """Structured judgement over short inputs: reasoning is switched off for speed and energy."""
 
-    def __init__(self, client: ChatClient, *, max_tokens: int = 1024) -> None:
+    def __init__(self, client: ChatClient, *, max_tokens: int = 4096) -> None:
+        # 22 items with reasons need more than 1024 tokens; a truncated reply cannot be parsed.
         super().__init__(client, max_tokens=max_tokens, thinking=False)
+
+    def _ask(self, system: str, user: str) -> dict:
+        """One JSON call, retried once if the reply cannot be parsed (e.g. truncated output)."""
+        try:
+            return self._ask_json(system, user)
+        except AgentOutputError:
+            return self._ask_json(system, user)
 
     def run(
         self,
@@ -117,7 +125,7 @@ class Verifier(Agent):
             f"Cited records:\n{cited_text}\n\n"
             f"Retrieved records (top k, structured fields):\n{retrieved_text}\n"
         )
-        data = self._ask_json(system, user)
+        data = self._ask(system, user)
 
         expected = all_item_texts()
         own = item_texts(answered)
@@ -187,7 +195,7 @@ class Verifier(Agent):
             f"{user}\n\nYour previous reply left these ids without a judgement or reason: "
             f"{', '.join(missing)}. Return the complete JSON object with every id answered."
         )
-        data = self._ask_json(system, retry)
+        data = self._ask(system, retry)
         return data, self._gaps(data, expected)
 
 
