@@ -8,6 +8,8 @@ revision.
 
 from __future__ import annotations
 
+import re
+
 from causa_nostra.agents.base import Agent, ChatClient
 from causa_nostra.answers.models import AnswerEntry
 from causa_nostra.pipeline.types import Question, QuestionFrame
@@ -28,7 +30,7 @@ Interpretation rules:
 
 Return ONLY a JSON object with these keys:
 - "status": "answered" if matching evidence exists, otherwise "no_evidence".
-- "answer": one short plain-language sentence.
+- "answer": one short plain-language sentence. After each claim, put the supporting edge_id in square brackets, e.g. "Burning reduced grass cover [camo:edge_x]."
 - "direction": "increase", "decrease", "no_effect", "mixed", or "unclear" if status is answered; otherwise null.
 - "confidence": number from 0 to 1, your probability that the answer matches the graph.
 - "certainty": "high", "moderate", "low", or "very_low" if answered; otherwise null.
@@ -39,6 +41,23 @@ Return ONLY a JSON object with these keys:
 def format_records(records: list[EvidenceRecord], limit: int) -> str:
     lines = [f"[{r.edge_id}] {r.text}" for r in records[:limit]]
     return "\n".join(lines) if lines else "(no records retrieved)"
+
+
+def _mentions(answer: str, edge_id: str) -> bool:
+    """True when `edge_id` appears as a whole token (so `e1` does not match inside `e10`)."""
+    return re.search(rf"(?<![\w:.-]){re.escape(edge_id)}(?![\w:.-])", answer) is not None
+
+
+def with_citations(answer: str, edge_ids: list[str]) -> str:
+    """Append any cited edge ID that the answer text does not already name.
+
+    Deterministic, so every answered entry shows its citations even when the
+    model leaves them out of the sentence.
+    """
+    missing = [edge_id for edge_id in edge_ids if not _mentions(answer, edge_id)]
+    if not missing:
+        return answer
+    return f"{answer.rstrip()} [{'; '.join(missing)}]"
 
 
 class Reasoner(Agent):
@@ -71,7 +90,10 @@ class Reasoner(Agent):
         if not data.get("answer"):
             # Model often returns null for no_evidence; the contract needs a string.
             data["answer"] = NO_EVIDENCE_ANSWER
-        return AnswerEntry.model_validate(data)
+        entry = AnswerEntry.model_validate(data)
+        if entry.status == "answered":
+            entry = entry.model_copy(update={"answer": with_citations(entry.answer, entry.edge_ids)})
+        return entry
 
 
 if __name__ == "__main__":
