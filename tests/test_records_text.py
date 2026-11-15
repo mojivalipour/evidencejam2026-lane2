@@ -56,3 +56,16 @@ def test_span_text_is_clipped_and_capped() -> None:
 def test_non_dict_spans_are_ignored() -> None:
     store = _store(["plain string", None])  # type: ignore[list-item]
     assert evidence_span_text(store.edge("e1")) == ""
+
+
+def test_extra_node_terms_are_indexed_once() -> None:
+    store = _store([])
+    store.node("S").name = "Prescribed burn"
+    store.node("S").entity_term = "fire"
+    store.node("S").applied_to = [
+        {"entity_term": "wd:Q1", "entity_type": "environmental_variable"},
+        {"entity_term": "grassland", "entity_type": "environmental_variable"},
+    ]
+    record = build_record(store.edge("e1"), store, {"wd:Q1": "forest"})
+    assert "subject terms: Prescribed burn; fire; forest (wd:Q1); grassland" in record.text
+    assert "{" not in record.text
