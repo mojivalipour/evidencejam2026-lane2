@@ -22,8 +22,13 @@ class FrameToQuery:
 
     @component.output_types(query=str)
     def run(self, frame: QuestionFrame) -> dict[str, str]:
-        parts = [frame.intervention, frame.outcome, *frame.search_terms]
-        return {"query": " ".join(p for p in parts if p).strip()}
+        return {"query": search_query(frame)}
+
+
+def search_query(frame: QuestionFrame) -> str:
+    """The exact BM25 query executed for a frame. The verifier logs this same string."""
+    parts = [frame.intervention, frame.outcome, *frame.search_terms]
+    return " ".join(p for p in parts if p).strip()
 
 
 class RetrievalPipeline:

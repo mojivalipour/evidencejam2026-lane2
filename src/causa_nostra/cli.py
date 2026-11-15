@@ -15,9 +15,10 @@ from pathlib import Path
 from causa_nostra.camo_rules.checks import check_graph
 from causa_nostra.camo_rules.schema import validate_graph_file
 from causa_nostra.graph.store import GraphStore
+from causa_nostra.llm.client import LLMClient, LLMSettings
 from causa_nostra.pipeline.batch import run_batch
 from causa_nostra.pipeline.questions import load_questions
-from causa_nostra.pipeline.stages import build_placeholder_stages
+from causa_nostra.pipeline.stages import build_agent_stages
 
 DEFAULT_GRAPH = "causal_graph.json"
 
@@ -43,8 +44,11 @@ def _cmd_check_graph(args: argparse.Namespace) -> int:
 def _cmd_run(args: argparse.Namespace) -> int:
     store = GraphStore.from_json(args.graph)
     questions = load_questions(args.questions)
-    stages = build_placeholder_stages(store)
-    answers = run_batch(questions, store, stages, args.output)
+    client = LLMClient(LLMSettings.from_env())
+    try:
+        answers = run_batch(questions, store, build_agent_stages(store, client), args.output)
+    finally:
+        client.close()
     print(f"wrote {len(answers.answers)} answers to {args.output}")
     return 0
 

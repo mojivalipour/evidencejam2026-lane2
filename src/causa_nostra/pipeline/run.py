@@ -38,8 +38,11 @@ def answer_question(
         # Deterministic checks first: cheap, and they catch hallucinated citations.
         problems = check_entry(draft, store)
         if not problems:
-            verification = stages.verify(question, draft, records)
+            verification = stages.verify(question, frame, draft, records)
             if verification.passed:
+                # The accepted confidence is the deterministic rubric score, not the model's self-estimate.
+                if verification.score is not None:
+                    draft = draft.model_copy(update={"confidence": verification.score})
                 return draft
             problems = verification.problems or ["verification failed"]
         if attempt == max_revisions:
@@ -94,9 +97,14 @@ if __name__ == "__main__":
     # Demo: run the whole orchestration on the first three practice questions.
     from causa_nostra.graph.store import GraphStore
     from causa_nostra.pipeline.questions import load_questions
-    from causa_nostra.pipeline.stages import build_placeholder_stages
+    from causa_nostra.llm.client import LLMClient, LLMSettings
+    from causa_nostra.pipeline.stages import build_agent_stages
 
     store = GraphStore.from_json("causal_graph.json")
     questions = load_questions("questions.yaml")[:3]
-    answers = run_pipeline(questions, store, build_placeholder_stages(store))
-    print(answers.model_dump_json(indent=2))
+    client = LLMClient(LLMSettings.from_env())
+    try:
+        answers = run_pipeline(questions, store, build_agent_stages(store, client))
+        print(answers.model_dump_json(indent=2))
+    finally:
+        client.close()
