@@ -6,6 +6,7 @@ import pytest
 
 from causa_nostra.agents.verifier import SYSTEM_PROMPT
 from causa_nostra.answers.rubric import (
+    ANSWERED_GATE_QUESTIONS,
     ANSWERED_QUESTIONS,
     ANSWERED_WEIGHTS,
     NO_EVIDENCE_GATE_QUESTIONS,
@@ -65,7 +66,7 @@ def test_normalise_lowercases_and_rejects_unknown() -> None:
 
 
 def test_irrelevant_item_is_not_scored_or_gated() -> None:
-    items = _all("pass", ANSWERED_QUESTIONS) | {"A4": "irrelevant", "D4": "irrelevant"}
+    items = _all("pass", ANSWERED_QUESTIONS) | {"A4": "irrelevant"}
     result = evaluate_answered(items)
     assert result.items["A4"] == "irrelevant"
     assert result.criteria["evidence_match"] == "pass"
@@ -73,12 +74,19 @@ def test_irrelevant_item_is_not_scored_or_gated() -> None:
     assert result.passed
 
 
-def test_fully_irrelevant_category_is_dropped_from_score() -> None:
-    items = _all("pass", ANSWERED_QUESTIONS) | {"D1": "irrelevant", "D2": "irrelevant",
-                                                "D3": "irrelevant", "D4": "irrelevant"}
-    result = evaluate_answered(items)
-    assert result.criteria["search_coverage"] == "irrelevant"
-    assert result.score == pytest.approx(1.0)
+@pytest.mark.parametrize("item", [i for c in ANSWERED_QUESTIONS.values() for i in c if i != "A4"])
+def test_mandatory_item_cannot_be_irrelevant(item: str) -> None:
+    # Regression: irrelevant used to bypass mandatory checks such as A1 (intervention match).
+    result = evaluate_answered(_all("pass", ANSWERED_QUESTIONS) | {item: "irrelevant"})
+    assert result.items[item] == "fail"
+    assert result.passed == (item not in ANSWERED_GATE_QUESTIONS)
+
+
+def test_intervention_mismatch_cannot_bypass_as_irrelevant() -> None:
+    result = evaluate_answered(_all("pass", ANSWERED_QUESTIONS) | {"A1": "irrelevant"})
+    assert result.score < 1.0
+    assert result.passed is False
+    assert result.failed_gates == ("A1",)
 
 
 def test_citation_item_cannot_be_irrelevant() -> None:
@@ -130,7 +138,25 @@ def test_no_evidence_partial_item_is_weighted() -> None:
     assert result.passed
 
 
-def test_no_evidence_gate_irrelevant_is_not_a_failure() -> None:
-    # N6 is not a citation item, so "irrelevant" is a valid judgement and does not fail the gate.
+def test_no_evidence_gate_irrelevant_is_a_failure() -> None:
+    # Only explicitly optional items may be irrelevant; N6 is mandatory.
     items = {"N1": "pass", "N2": "pass", "N3": "pass", "N4": "pass", "N5": "pass", "N6": "irrelevant"}
-    assert evaluate_no_evidence(items).passed is True
+    result = evaluate_no_evidence(items)
+    assert result.items["N6"] == "fail"
+    assert result.passed is False
+
+
+@pytest.mark.parametrize("item", ["N1", "N2", "N3", "N4", "N5", "N6"])
+def test_every_no_evidence_item_gates_acceptance(item: str) -> None:
+    # Regression: only N6 gated, so N5=fail (evidence was found) still passed.
+    items = {n: "pass" for n in ["N1", "N2", "N3", "N4", "N5", "N6"]} | {item: "fail"}
+    result = evaluate_no_evidence(items)
+    assert result.passed is False
+    assert item in result.failed_gates
+
+
+def test_no_evidence_missing_items_block_acceptance() -> None:
+    # Regression: omitting N1-N5 used to pass with score 0.0.
+    result = evaluate_no_evidence({"N6": "pass"})
+    assert result.passed is False
+    assert result.score == pytest.approx(0.0)

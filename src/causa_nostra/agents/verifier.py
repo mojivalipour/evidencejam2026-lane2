@@ -13,17 +13,28 @@ from causa_nostra.answers.rubric import (
     ANSWERED_QUESTIONS,
     IRRELEVANT_GUIDANCE,
     JUDGEMENT_CHOICES,
+    NO_EVIDENCE_GATE_QUESTIONS,
+    NO_EVIDENCE_QUESTIONS,
+    RubricResult,
     evaluate_answered,
+    evaluate_no_evidence,
     rubric_score,
 )
 from causa_nostra.pipeline.types import Question, QuestionFrame, Verification
-from causa_nostra.retrieval.records import EvidenceRecord
+from causa_nostra.retrieval.pipeline import search_query
+from causa_nostra.retrieval.records import EvidenceRecord, structured_text
 
-__all__ = ["SYSTEM_PROMPT", "Verifier", "build_system_prompt", "rubric_score"]
+__all__ = [
+    "NO_EVIDENCE_SYSTEM_PROMPT",
+    "SYSTEM_PROMPT",
+    "Verifier",
+    "build_system_prompt",
+    "rubric_score",
+]
 
 
-def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTIONS) -> str:
-    """Build the verifier prompt from the rubric's sub-items and judgement choices."""
+def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTIONS, *, subject: str = "answered") -> str:
+    """Build a verifier prompt from the rubric's sub-items and judgement choices."""
     choices = ", ".join(f'"{choice}"' for choice in JUDGEMENT_CHOICES)
     sections = "\n\n".join(
         f"{category}:\n" + "\n".join(f'- "{item}": {text}' for item, text in items.items())
@@ -31,8 +42,8 @@ def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTION
     )
     item_ids = ", ".join(f'"{item}"' for category in questions.values() for item in category)
     return (
-        "You verify a draft answer against the evidence records it cites.\n"
-        f"Judge each item as {choices}. Use only the records; do not add outside knowledge.\n"
+        f"You verify a {subject} draft against the evidence records and search log provided.\n"
+        f"Judge each item as {choices}. Use only the records and search log; do not add outside knowledge.\n"
         f"{IRRELEVANT_GUIDANCE}\n\n"
         f"{sections}\n\n"
         "Return ONLY a JSON object with these keys:\n"
@@ -42,7 +53,11 @@ def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTION
     )
 
 
-SYSTEM_PROMPT = build_system_prompt()
+SYSTEM_PROMPT = build_system_prompt(ANSWERED_QUESTIONS, subject="answered")
+NO_EVIDENCE_SYSTEM_PROMPT = build_system_prompt(
+    {**NO_EVIDENCE_QUESTIONS, "absence_gate": {"N6": NO_EVIDENCE_GATE_QUESTIONS["N6"]}},
+    subject="missing-evidence",
+)
 
 
 class Verifier(Agent):
@@ -58,9 +73,20 @@ class Verifier(Agent):
         draft: AnswerEntry,
         records: list[EvidenceRecord],
     ) -> Verification:
+        # Status selects both the prompt and the rubric: missing-evidence drafts never get answered items.
+        answered = draft.status == "answered"
+        system = SYSTEM_PROMPT if answered else NO_EVIDENCE_SYSTEM_PROMPT
+
         by_id = {r.edge_id: r for r in records}
-        cited_text = "\n".join(f"[{e}] {by_id[e].text}" for e in draft.edge_ids if e in by_id) or "(none)"
-        retrieved_text = "\n".join(f"[{r.edge_id}] {r.text}" for r in records) or "(none)"
+        cited_text = "\n".join(
+            f"[{e}]\n{structured_text(by_id[e])}" for e in draft.edge_ids if e in by_id
+        ) or "(none)"
+        retrieved_text = "\n".join(f"[{r.edge_id}]\n{structured_text(r)}" for r in records) or "(none)"
+        search_log = (
+            f"Executed query: {search_query(frame)}\n"
+            f"Alternative terms searched: {', '.join(frame.search_terms) or '(none)'}\n"
+            f"Retrieved edge_ids (top k, ranked): {', '.join(r.edge_id for r in records) or '(none)'}"
+        )
         user = (
             f"Question: {question.question}\n"
             f"Processed intervention: {frame.intervention}\n"
@@ -70,13 +96,15 @@ class Verifier(Agent):
             f"Draft answer: {draft.answer}\n"
             f"Draft direction: {draft.direction}\n"
             f"Draft certainty: {draft.certainty}\n"
+            f"Search log:\n{search_log}\n\n"
             f"Cited records:\n{cited_text}\n\n"
-            f"Retrieved records (top k):\n{retrieved_text}\n"
+            f"Retrieved records (top k, structured fields):\n{retrieved_text}\n"
         )
-        data = self._ask_json(SYSTEM_PROMPT, user)
+        data = self._ask_json(system, user)
 
         raw_items = data.get("items")
-        result = evaluate_answered(raw_items if isinstance(raw_items, dict) else {})
+        items = raw_items if isinstance(raw_items, dict) else {}
+        result: RubricResult = evaluate_answered(items) if answered else evaluate_no_evidence(items)
         raw_problems = data.get("problems")
         problems = [str(p).strip() for p in raw_problems if str(p).strip()] if isinstance(raw_problems, list) else []
         raw_supporting = data.get("supporting_edge_ids")
@@ -89,6 +117,7 @@ class Verifier(Agent):
             criteria=result.criteria,
             problems=problems,
             supporting_edge_ids=supporting,
+            score=result.score,
         )
 
 

@@ -83,6 +83,30 @@ def build_records(store: GraphStore) -> list[EvidenceRecord]:
     return [build_record(edge, store) for edge in store.edges()]
 
 
+def structured_text(record: EvidenceRecord) -> str:
+    """Every authoritative field of a record, one per line, for LLM judgement.
+
+    Unlike `text` (the BM25 indexing string), this keeps qualifiers, relation sign,
+    certainty grade and source document, so direction and provenance can be checked.
+    """
+    fields = {
+        "edge_id": record.edge_id,
+        "subject": record.subject_label,
+        "subject_qualifier": record.subject_qualifier,
+        "predicate": record.predicate,
+        "causal_language": record.causal_language,
+        "null_result": record.negated,
+        "relation_sign": record.relation_sign,
+        "object": record.object_label,
+        "object_qualifier": record.object_qualifier,
+        "ecosystem_context": record.ecosystem_context,
+        "certainty_grade": record.certainty_grade,
+        "source_document": record.source_document,
+        "original_sentence": record.original_sentence,
+    }
+    return "\n".join(f"  {name}: {'(none)' if value in (None, '') else value}" for name, value in fields.items())
+
+
 if __name__ == "__main__":
     # Demo: print the indexed text of the first evidence record.
     store = GraphStore.from_json("causal_graph.json")

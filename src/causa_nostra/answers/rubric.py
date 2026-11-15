@@ -20,9 +20,13 @@ Judgement = str  # "pass" | "partial" | "fail" | "irrelevant"
 JUDGEMENT_VALUE: dict[str, float] = {"pass": 1.0, "partial": 0.5, "fail": 0.0}
 IRRELEVANT: Judgement = "irrelevant"
 JUDGEMENT_CHOICES: tuple[str, ...] = (*JUDGEMENT_VALUE, IRRELEVANT)
+
+# Only explicitly optional items may be judged "irrelevant". Every other item is mandatory:
+# "irrelevant" on a mandatory item is treated as fail, so it cannot bypass a check.
+OPTIONAL_ITEMS: frozenset[str] = frozenset({"A4"})  # species / ecosystem / comparator context
 IRRELEVANT_GUIDANCE = (
-    '"irrelevant" means the item does not apply to this question (for example, no species or '
-    "context was requested). Use it sparingly. Citation items always apply and cannot be irrelevant."
+    f'"irrelevant" is allowed only for these optional items: {", ".join(sorted(OPTIONAL_ITEMS))}, '
+    "and only when the question requested no such context. Every other item must be pass, partial, or fail."
 )
 
 # Answered drafts: sub-items grouped by scored category.
@@ -94,8 +98,14 @@ NO_EVIDENCE_WEIGHTS: dict[str, float] = {
     "candidates_checked": 0.30,
 }
 
-# Gate only: a fail means the answer claims absence of an effect from absence of evidence.
+# Every missing-evidence item gates acceptance. A fail in interpretation, search coverage,
+# candidate checks (N5: evidence that answers the question was found), or absence
+# justification (N6) sends the draft to correction.
 NO_EVIDENCE_GATE_QUESTIONS: dict[str, str] = {
+    item: text
+    for category_items in NO_EVIDENCE_QUESTIONS.values()
+    for item, text in category_items.items()
+} | {
     "N6": "Does the answer avoid claiming that an effect does not exist merely because evidence was not found?",
 }
 
@@ -124,10 +134,10 @@ CITATION_ITEMS: frozenset[str] = frozenset(ANSWERED_QUESTIONS["citation_support"
 
 
 def normalise(value: object, item: str = "") -> Judgement:
-    """Lower-case a judgement. Anything not in JUDGEMENT_CHOICES counts as fail,
-    and citation items cannot be marked irrelevant."""
+    """Lower-case a judgement. Anything not in JUDGEMENT_CHOICES counts as fail.
+    "irrelevant" is accepted only for OPTIONAL_ITEMS; on any other item it counts as fail."""
     text = str(value).strip().lower()
-    if text == IRRELEVANT and item in CITATION_ITEMS:
+    if text == IRRELEVANT and item not in OPTIONAL_ITEMS:
         return "fail"
     return text if text in JUDGEMENT_CHOICES else "fail"
 
@@ -193,8 +203,12 @@ def evaluate_no_evidence(items: Mapping[str, object]) -> RubricResult:
 
 
 def rubric_score(criteria: Mapping[str, object]) -> float:
-    """Answered weighted score from category judgements. Missing categories count as fail."""
-    judgements = {name: normalise(criteria.get(name, "fail")) for name in ANSWERED_WEIGHTS}
+    """Answered weighted score from category judgements. Missing categories count as fail.
+    A category may be "irrelevant" only if category_judgement produced it (all items optional)."""
+    judgements: dict[str, Judgement] = {}
+    for name in ANSWERED_WEIGHTS:
+        text = str(criteria.get(name, "fail")).strip().lower()
+        judgements[name] = text if text in JUDGEMENT_CHOICES else "fail"
     return weighted_score(judgements, ANSWERED_WEIGHTS)
 
 

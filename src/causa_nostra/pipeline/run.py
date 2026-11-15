@@ -40,6 +40,9 @@ def answer_question(
         if not problems:
             verification = stages.verify(question, frame, draft, records)
             if verification.passed:
+                # The accepted confidence is the deterministic rubric score, not the model's self-estimate.
+                if verification.score is not None:
+                    draft = draft.model_copy(update={"confidence": verification.score})
                 return draft
             problems = verification.problems or ["verification failed"]
         if attempt == max_revisions:
