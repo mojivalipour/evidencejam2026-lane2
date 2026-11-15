@@ -19,6 +19,7 @@ from causa_nostra.llm.client import LLMClient, LLMSettings
 from causa_nostra.pipeline.batch import run_batch
 from causa_nostra.pipeline.questions import load_questions
 from causa_nostra.pipeline.stages import build_agent_stages
+from causa_nostra.pipeline.trace import configure_logging, debug_requested
 
 DEFAULT_GRAPH = "causal_graph.json"
 
@@ -42,6 +43,7 @@ def _cmd_check_graph(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    configure_logging(debug_requested(args.debug))
     store = GraphStore.from_json(args.graph)
     questions = load_questions(args.questions)
     client = LLMClient(LLMSettings.from_env())
@@ -65,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("questions")
     run.add_argument("output")
     run.add_argument("--graph", default=DEFAULT_GRAPH)
+    run.add_argument("--debug", action="store_true", help="also log each stage's input and output (or set CAUSA_DEBUG=1)")
     run.set_defaults(func=_cmd_run)
     return parser
 

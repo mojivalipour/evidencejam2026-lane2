@@ -29,6 +29,8 @@ class Verification(BaseModel):
 
     passed: bool
     criteria: dict[str, str] = Field(default_factory=dict)  # criterion -> pass|partial|fail|irrelevant
+    items: dict[str, str] = Field(default_factory=dict)  # sub-item id (e.g. A1, N5) -> judgement
+    item_reasons: dict[str, str] = Field(default_factory=dict)  # sub-item id -> verifier's reason
     problems: list[str] = Field(default_factory=list)
     supporting_edge_ids: list[str] = Field(default_factory=list)
     # Deterministic rubric score for the verified draft's status (answered or no_evidence rubric).

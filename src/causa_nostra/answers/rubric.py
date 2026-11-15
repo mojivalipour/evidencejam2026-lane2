@@ -133,6 +133,29 @@ def weighted_score(judgements: Mapping[str, Judgement], weights: Mapping[str, fl
 CITATION_ITEMS: frozenset[str] = frozenset(ANSWERED_QUESTIONS["citation_support"])
 
 
+def item_texts(answered: bool) -> dict[str, str]:
+    """Every sub-item id with its question text, for the rubric that applies to the draft status."""
+    if answered:
+        return {item: text for items in ANSWERED_QUESTIONS.values() for item, text in items.items()}
+    return {item: text for items in NO_EVIDENCE_QUESTIONS.values() for item, text in items.items()} | {
+        "N6": NO_EVIDENCE_GATE_QUESTIONS["N6"]
+    }
+
+
+def all_item_texts() -> dict[str, str]:
+    """All 22 sub-items (A1-D4, then N1-N6), asked of the verifier for every draft."""
+    return item_texts(True) | item_texts(False)
+
+
+def normalise_item(value: object, item: str, own_items: Mapping[str, str]) -> Judgement:
+    """Judgement for any item. Items outside the draft's own rubric may be "irrelevant" and are not scored.
+    Items in the draft's own rubric follow `normalise`."""
+    if item in own_items:
+        return normalise(value, item)
+    text = str(value).strip().lower()
+    return text if text in JUDGEMENT_CHOICES else "fail"
+
+
 def normalise(value: object, item: str = "") -> Judgement:
     """Lower-case a judgement. Anything not in JUDGEMENT_CHOICES counts as fail.
     "irrelevant" is accepted only for OPTIONAL_ITEMS; on any other item it counts as fail."""

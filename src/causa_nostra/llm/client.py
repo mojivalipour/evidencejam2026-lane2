@@ -60,7 +60,7 @@ class LLMClient:
         self,
         settings: LLMSettings,
         *,
-        timeout: float = 120.0,
+        timeout: float = 300.0,
         retries: int = 2,
         backoff: float = 1.0,
         sleep: Callable[[float], None] = time.sleep,
