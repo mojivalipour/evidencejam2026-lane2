@@ -33,7 +33,9 @@ def test_failed_verification_keeps_citations_at_lower_confidence():
         )
 
     def verify(question, frame, draft, records):
-        return Verification(passed=False, score=0.4, problems=["direction wording too strong"])
+        criteria = {"evidence_match": "pass", "direction_and_causal_language": "pass",
+                    "citation_support": "pass", "search_coverage": "fail"}
+        return Verification(passed=False, score=0.4, criteria=criteria, problems=["direction wording too strong"])
 
     stages = Stages(
         understand=lambda q: QuestionFrame(question_id=q.id, intervention="S", outcome="O"),
@@ -78,5 +80,12 @@ def test_unverified_answer_kept_when_only_coverage_fails():
 def test_correctness_failure_goes_to_error_path_not_unverified():
     criteria = {"evidence_match": "fail", "direction_and_causal_language": "fail",
                 "citation_support": "pass", "search_coverage": "pass"}
+    with pytest.raises(DraftRejected):
+        answer_question(Question(id="Q1", question="q"), _store(), _stages_failing(criteria))
+
+
+def test_missing_correctness_judgement_is_not_a_pass():
+    # A failed verification that omits a correctness category must not reach the unverified path.
+    criteria = {"evidence_match": "pass", "citation_support": "pass", "search_coverage": "pass"}
     with pytest.raises(DraftRejected):
         answer_question(Question(id="Q1", question="q"), _store(), _stages_failing(criteria))

@@ -254,13 +254,15 @@ def test_verifier_no_evidence_cannot_pass_when_it_names_supporting_edges():
     assert "bear on the question" in result.problems[0]
 
 
-def test_verifier_no_evidence_ignores_one_sided_candidates():
-    # An edge that matched only one side (e.g. the right outcome, another intervention) is not supporting evidence.
+def test_verifier_no_evidence_keeps_verifier_named_edge_despite_one_sided_match():
+    # Lexical ranks do not decide relevance: the verifier names e1 from its wording, though BM25 matched one side.
+    # The verifier's named edge must still block a no_evidence draft.
     reply = json.dumps({"items": _N_PASS, "problems": [], "supporting_edge_ids": ["e1"]})
     one_sided = _record().model_copy(update={"retrieval_ranks": {"object": 1}})
     result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _no_evidence_draft(), [one_sided])
-    assert result.passed is True
-    assert result.supporting_edge_ids == []
+    assert result.passed is False
+    assert result.supporting_edge_ids == ["e1"]
+    assert "bear on the question" in result.problems[0]
 
 
 def test_verifier_receives_structured_metadata_and_search_log():

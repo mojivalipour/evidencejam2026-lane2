@@ -24,12 +24,13 @@ class DraftRejected(RuntimeError):
     """A draft still cites unknown edges after the allowed revisions."""
 
 
-CORRECTNESS_CRITERIA = ("interpretation", "evidence_match", "direction_and_causal_language", "citation_support")
+# Answered-draft correctness gates. `interpretation` belongs to the missing-evidence rubric only.
+CORRECTNESS_CRITERIA = ("evidence_match", "direction_and_causal_language", "citation_support")
 
 
 def _correctness_failed(verification: Verification) -> bool:
-    """True if any correctness gate is not a clean pass. Such drafts never reach the unverified path."""
-    return any(verification.criteria.get(name, "pass") != "pass" for name in CORRECTNESS_CRITERIA)
+    """True unless every answered-draft correctness gate explicitly passes. Missing judgements count as failures."""
+    return any(verification.criteria.get(name) != "pass" for name in CORRECTNESS_CRITERIA)
 
 
 def _verification_feedback(verification: Verification) -> list[str]:

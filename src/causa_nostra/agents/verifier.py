@@ -162,11 +162,10 @@ class Verifier(Agent):
         if gaps:
             problems.insert(0, f"verifier left items unanswered: {', '.join(gaps)}")
         raw_supporting = data.get("supporting_edge_ids")
-        # Only edges that matched both the intervention and the outcome count as supporting.
-        # A one-sided candidate (e.g. the right outcome, a different intervention) must not block a valid no_evidence.
-        both_sided = {r.edge_id for r in records if {"subject", "object"} <= set(r.retrieval_ranks)}
+        # The verifier judges semantic relevance. Lexical ranks do not decide it, so an edge the verifier
+        # names is kept even if BM25 matched only one side (its wording may still answer the question).
         supporting = (
-            [e for e in raw_supporting if isinstance(e, str) and e in by_id and e in both_sided]
+            [e for e in raw_supporting if isinstance(e, str) and e in by_id]
             if isinstance(raw_supporting, list)
             else []
         )
