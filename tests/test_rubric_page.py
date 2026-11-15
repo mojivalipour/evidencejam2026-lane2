@@ -37,6 +37,21 @@ def test_write_rubric_lists_criteria_problems_and_supporting_edges(tmp_path: Pat
     assert "e1" in text
 
 
+def test_rubric_page_lists_all_22_items_for_either_status(tmp_path: Path):
+    from causa_nostra.answers.evidence import render_rubric_html
+
+    answered = Verification(passed=True, criteria={}, items={"A1": "pass"}, score=1.0)
+    no_evidence_entry = AnswerEntry(id="Q2", status="no_evidence", answer="None.", confidence=0.0,
+                                    searched_for="x")
+    no_evidence = Verification(passed=True, criteria={}, items={"N1": "pass"}, score=1.0)
+
+    for entry, verification in ((_entry(), answered), (no_evidence_entry, no_evidence)):
+        text = render_rubric_html(entry, verification)
+        for item in ("A1", "A4", "B1", "C4", "D4", "N1", "N6"):
+            assert f"<code>{item}</code>" in text
+        assert "not_applicable" in text
+
+
 def test_on_returned_receives_the_verification_of_the_returned_answer():
     store = GraphStore(
         Graph(

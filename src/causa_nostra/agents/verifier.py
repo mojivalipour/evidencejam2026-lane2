@@ -11,15 +11,16 @@ from causa_nostra.agents.base import Agent, ChatClient
 from causa_nostra.answers.models import AnswerEntry
 from causa_nostra.answers.rubric import (
     ANSWERED_QUESTIONS,
-    IRRELEVANT_GUIDANCE,
     JUDGEMENT_CHOICES,
     NO_EVIDENCE_GATE_QUESTIONS,
     NO_EVIDENCE_QUESTIONS,
     RubricResult,
+    all_item_texts,
     evaluate_answered,
     evaluate_no_evidence,
     item_texts,
     normalise,
+    normalise_item,
     rubric_score,
 )
 from causa_nostra.pipeline.types import Question, QuestionFrame, Verification
@@ -35,18 +36,31 @@ __all__ = [
 ]
 
 
-def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTIONS, *, subject: str = "answered") -> str:
-    """Build a verifier prompt from the rubric's sub-items and judgement choices."""
+def build_system_prompt() -> str:
+    """One verifier prompt for every draft: all 22 sub-items are asked, and the agent marks the ones that do not apply."""
     choices = ", ".join(f'"{choice}"' for choice in JUDGEMENT_CHOICES)
+    groups = {
+        "Answered-draft items": ANSWERED_QUESTIONS,
+        "Missing-evidence items": {**NO_EVIDENCE_QUESTIONS, "absence_gate": {"N6": NO_EVIDENCE_GATE_QUESTIONS["N6"]}},
+    }
     sections = "\n\n".join(
-        f"{category}:\n" + "\n".join(f'- "{item}": {text}' for item, text in items.items())
-        for category, items in questions.items()
+        f"{group}:\n" + "\n\n".join(
+            f"{category}:\n" + "\n".join(f'- "{item}": {text}' for item, text in items.items())
+            for category, items in categories.items()
+        )
+        for group, categories in groups.items()
     )
-    item_ids = ", ".join(f'"{item}"' for category in questions.values() for item in category)
+    item_ids = ", ".join(f'"{item}"' for item in all_item_texts())
+    guidance = (
+        'Mark an item "irrelevant" when it does not apply to this draft. For an answered draft, the '
+        "Missing-evidence items do not apply. For a no_evidence draft, the Answered-draft items do not apply, "
+        'and the citation items C1-C4 do not apply when it cites no edges. Mark A4 "irrelevant" when the question '
+        "requested no species, ecosystem, or comparator context. Every other item must be pass, partial, or fail."
+    )
     return (
-        f"You verify a {subject} draft against the evidence records and search log provided.\n"
+        "You verify a draft answer against the evidence records and search log provided.\n"
         f"Judge each item as {choices}. Use only the records and search log; do not add outside knowledge.\n"
-        f"{IRRELEVANT_GUIDANCE}\n\n"
+        f"{guidance}\n\n"
         f"{sections}\n\n"
         "Answer EVERY item id listed below. Omitting an id is not allowed.\n"
         "Return ONLY a JSON object with these keys:\n"
@@ -59,11 +73,8 @@ def build_system_prompt(questions: dict[str, dict[str, str]] = ANSWERED_QUESTION
     )
 
 
-SYSTEM_PROMPT = build_system_prompt(ANSWERED_QUESTIONS, subject="answered")
-NO_EVIDENCE_SYSTEM_PROMPT = build_system_prompt(
-    {**NO_EVIDENCE_QUESTIONS, "absence_gate": {"N6": NO_EVIDENCE_GATE_QUESTIONS["N6"]}},
-    subject="missing-evidence",
-)
+SYSTEM_PROMPT = build_system_prompt()
+NO_EVIDENCE_SYSTEM_PROMPT = SYSTEM_PROMPT  # one prompt for every draft
 
 
 class Verifier(Agent):
@@ -81,7 +92,7 @@ class Verifier(Agent):
     ) -> Verification:
         # Status selects both the prompt and the rubric: missing-evidence drafts never get answered items.
         answered = draft.status == "answered"
-        system = SYSTEM_PROMPT if answered else NO_EVIDENCE_SYSTEM_PROMPT
+        system = SYSTEM_PROMPT
 
         by_id = {r.edge_id: r for r in records}
         cited_text = "\n".join(
@@ -108,20 +119,23 @@ class Verifier(Agent):
         )
         data = self._ask_json(system, user)
 
-        expected = item_texts(answered)
+        expected = all_item_texts()
+        own = item_texts(answered)
         data, gaps = self._complete(system, user, data, expected)
         raw_items = data.get("items")
         raw_items = raw_items if isinstance(raw_items, dict) else {}
         raw_reasons = data.get("reasons")
         raw_reasons = raw_reasons if isinstance(raw_reasons, dict) else {}
         # An item with no judgement or no reason, even after the retry, counts as fail.
+        # Only the draft's own rubric is scored; the other items are recorded but not scored.
         items = {
-            item: "fail" if item in gaps else normalise(raw_items.get(item), item) for item in expected
+            item: "fail" if item in gaps else normalise_item(raw_items.get(item), item, own) for item in expected
         }
         item_reasons = {
             item: (str(raw_reasons.get(item) or "").strip() or "no reason returned") for item in expected
         }
-        result: RubricResult = evaluate_answered(items) if answered else evaluate_no_evidence(items)
+        scored = {item: items[item] for item in own}
+        result: RubricResult = evaluate_answered(scored) if answered else evaluate_no_evidence(scored)
         raw_problems = data.get("problems")
         problems = [str(p).strip() for p in raw_problems if str(p).strip()] if isinstance(raw_problems, list) else []
         if gaps:

@@ -16,6 +16,8 @@ from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.types import Verification
 from causa_nostra.retrieval.records import EvidenceRecord, build_record, curie_labels
 
+NOT_APPLICABLE = "not_applicable"
+
 
 def render_evidence_html(entry: AnswerEntry, records: list[EvidenceRecord]) -> str:
     """HTML page showing the answer, its direction and certainty, and each cited edge."""
@@ -74,17 +76,28 @@ def write_evidence(entry: AnswerEntry, store: GraphStore, out_dir: str | Path, r
         return None  # outside the repo: cannot be listed as a repo-relative extra
 
 
+def _item_reason(entry: AnswerEntry, verification: Verification, item: str) -> str:
+    """Verifier's reason for an item it judged. Items outside this draft's rubric say so."""
+    if item in verification.items:
+        return verification.item_reasons.get(item, "no reason returned")
+    return f"Not part of the rubric for a {entry.status} draft; not scored."
+
+
 def render_rubric_html(entry: AnswerEntry, verification: Verification) -> str:
-    """HTML page with every rubric sub-item judgement for the returned answer, and the category totals."""
+    """HTML page listing all 22 rubric sub-items (A1-D4 and N1-N6) with the judgement for each, and the category totals.
+
+    Items the verifier judged are shown with its judgement. Items outside this draft's rubric are shown as not_applicable.
+    """
     esc = html.escape
     texts = {**item_texts(True), **item_texts(False)}
     criteria_rows = "".join(
         f"<tr><td>{esc(name)}</td><td>{esc(value)}</td></tr>" for name, value in verification.criteria.items()
     )
     item_rows = "".join(
-        f"<tr><td><code>{esc(item)}</code></td><td>{esc(texts.get(item, ''))}</td><td>{esc(value)}</td>"
-        f"<td>{esc(verification.item_reasons.get(item, 'no reason returned'))}</td></tr>"
-        for item, value in verification.items.items()
+        f"<tr><td><code>{esc(item)}</code></td><td>{esc(text)}</td>"
+        f"<td>{esc(verification.items.get(item, NOT_APPLICABLE))}</td>"
+        f"<td>{esc(_item_reason(entry, verification, item))}</td></tr>"
+        for item, text in texts.items()
     )
     items_table = (
         "<table><thead><tr><th>Item</th><th>Question</th><th>Judgement</th><th>Reason</th></tr></thead>"
@@ -101,7 +114,7 @@ def render_rubric_html(entry: AnswerEntry, verification: Verification) -> str:
         "Answer": entry.answer,
         "Direction": entry.direction or "(null)",
         "Certainty": entry.certainty or "(null)",
-        "Confidence": f"{entry.confidence:.2f}",
+        "Confidence (rubric score)": f"{entry.confidence:.2f}",
         "Cited edge_ids": ", ".join(entry.edge_ids) or "none",
         "Searched for": entry.searched_for or "(null)",
     }
@@ -118,7 +131,7 @@ def render_rubric_html(entry: AnswerEntry, verification: Verification) -> str:
         f"<h1>{esc(entry.id)} rubric</h1>"
         f"<p><b>Status:</b> {esc(entry.status)} &nbsp; <b>Verifier passed:</b> {verification.passed} "
         f"&nbsp; <b>Rubric score:</b> {score}</p>"
-        "<h2>Reasoner answer (returned draft)</h2>"
+        "<h2>Returned answer</h2>"
         f"{draft_table}"
         "<h2>Sub-item judgements</h2>"
         f"{items_table}"
