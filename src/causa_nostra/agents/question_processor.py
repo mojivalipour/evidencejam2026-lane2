@@ -12,6 +12,7 @@ from causa_nostra.agents.base import Agent, AgentOutputError, ChatClient
 from causa_nostra.pipeline.types import Question, QuestionFrame
 
 MAX_SEARCH_TERMS = 15
+MAX_SIDE_TERMS = 10
 
 SYSTEM_PROMPT = """You extract the structure of a causal question about ecology.
 The question asks what one intervention or condition does to one outcome.
@@ -20,9 +21,10 @@ Return ONLY a JSON object with these keys:
 - "intervention": the broad intervention or condition, as a short noun phrase.
 - "outcome": the broad outcome and measured attribute, as a short noun phrase.
 - "context": list of context constraints stated explicitly in the question. Use [] if none. Do not invent constraints.
-- "search_terms": list of up to 15 alternative words or phrases that could label the intervention or outcome in a scientific paper (synonyms, singular/plural, common variants). These are search candidates only.
+- "intervention_terms": up to 10 alternative words or phrases for the INTERVENTION only (synonyms, singular/plural, common variants). Do not include outcome terms.
+- "outcome_terms": up to 10 alternative words or phrases for the OUTCOME only (synonyms, singular/plural, common variants). Do not include intervention terms.
 
-Do not answer the question. Do not add information that is not in the question."""
+These are search candidates only. Do not answer the question. Do not add information that is not in the question."""
 
 
 def _clean_list(values: object) -> list[str]:
@@ -35,6 +37,17 @@ def _clean_list(values: object) -> list[str]:
             if text and text.lower() not in (s.lower() for s in seen):
                 seen.append(text)
     return seen
+
+
+def _side_terms(intervention_raw: object, outcome_raw: object) -> tuple[list[str], list[str]]:
+    """Per-side synonyms. A term listed for both sides cannot tell them apart, so it is dropped from both."""
+    intervention = _clean_list(intervention_raw)[:MAX_SIDE_TERMS]
+    outcome = _clean_list(outcome_raw)[:MAX_SIDE_TERMS]
+    shared = {t.lower() for t in intervention} & {t.lower() for t in outcome}
+    return (
+        [t for t in intervention if t.lower() not in shared],
+        [t for t in outcome if t.lower() not in shared],
+    )
 
 
 class QuestionProcessor(Agent):
@@ -51,13 +64,17 @@ class QuestionProcessor(Agent):
         if not intervention or not outcome:
             raise AgentOutputError("question processor did not extract both intervention and outcome")
 
-        search_terms = _clean_list(data.get("search_terms"))[:MAX_SEARCH_TERMS]
+        intervention_terms, outcome_terms = _side_terms(data.get("intervention_terms"), data.get("outcome_terms"))
+        # `search_terms` is the combined candidate list for display and verification.
+        combined = _clean_list([*_clean_list(data.get("search_terms")), *intervention_terms, *outcome_terms])
         return QuestionFrame(
             question_id=question.id,
             intervention=intervention,
             outcome=outcome,
             context=_clean_list(data.get("context")),
-            search_terms=search_terms,
+            search_terms=combined[:MAX_SEARCH_TERMS],
+            intervention_terms=intervention_terms,
+            outcome_terms=outcome_terms,
         )
 
 
@@ -72,11 +89,16 @@ def format_frame(question: Question, frame: QuestionFrame) -> str:
         f"intervention:  {frame.intervention}",
         f"outcome:       {frame.outcome}",
         f"context:       {', '.join(frame.context) if frame.context else '(none)'}",
-        f"search_terms ({len(frame.search_terms)}):",
+        f"intervention terms ({len(frame.intervention_terms)}):",
     ]
+    lines += [f"  - {term}" for term in frame.intervention_terms]
+    lines.append(f"outcome terms ({len(frame.outcome_terms)}):")
+    lines += [f"  - {term}" for term in frame.outcome_terms]
+    lines.append(f"search_terms ({len(frame.search_terms)}):")
     lines += [f"  - {term}" for term in frame.search_terms]
     lines.append("=" * width)
     return "\n".join(lines)
+
 
 
 if __name__ == "__main__":
