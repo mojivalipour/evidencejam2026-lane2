@@ -75,6 +75,60 @@ Each output entry contains a short answer and the information needed to check it
 
 `no_effect` means evidence reports a null result. It is different from `no_evidence`, which means the program could not establish an answer from the graph. A processing error can also produce a fallback `no_evidence` entry; the accompanying explanation should make that clear.
 
+### Output file and extras
+
+The output file (the path passed as the second argument to `run.sh`) is a JSON object with two top-level keys:
+
+```json
+{
+  "team": "CAUSA NOSTRA",
+  "answers": [
+    {
+      "id": "<question id>",
+      "status": "answered | no_evidence",
+      "answer": "<short plain-language answer>",
+      "direction": "increase | decrease | no_effect | mixed | unclear | null",
+      "confidence": 0.0,
+      "certainty": "high | moderate | low | very_low | null",
+      "edge_ids": ["camo:edge_<hash>"],
+      "searched_for": "<search description> | null",
+      "extras": ["<repo-relative path>"]
+    }
+  ]
+}
+```
+
+- `team` is always `"CAUSA NOSTRA"`.
+- `answers` holds exactly one entry per input question, in the original question order. Each `id` comes from the question file and is used as given.
+- `edge_ids` lists graph edge IDs from `causal_graph.json` (the `camo:edge_` prefix plus a hash). Every ID is checked against the graph before the file is written, and invalid IDs are removed.
+- `direction` and `certainty` are null for `no_evidence` entries. `edge_ids` is empty for them, and `searched_for` describes what was checked.
+- `searched_for` is null for `answered` entries.
+- `extras` is empty or lists existing files in the `<answers-stem>_evidence/` folder, described above.
+- `confidence` is a number between 0 and 1.
+
+The file is valid JSON and the entries follow the competition format. Fields are not added or renamed, so downstream scripts can read every entry the same way. `answers.json` is the competition deliverable; the other files are optional extras that help a reader check the answer.
+
+Each run also writes a folder next to the answers file, named `<answers-stem>_evidence/`. Extras are referenced by repo-relative path in each entry's `extras` list:
+
+| File | Written for | Contents |
+| --- | --- | --- |
+| `<id>_evidence.html` | `answered` entries only | The question's cited edges, their source sentences, and source document references. Open it to check each claim against the graph. |
+| `<id>_rubric.html` | Every entry the verifier scored | The verifier's rubric judgments (pass / partial / fail), short explanations, and the weighted score used as `confidence`. For `no_evidence` entries, this page shows the missing-evidence rubric and the search summary. |
+
+The image below is an example of a `<id>_rubric.html` page for an `answered` entry, rendered as a PNG. It shows the returned answer and its fields, the sub-item judgments grouped by category, category totals, and the problems the verifier raised:
+
+![Example rubric page for an answered entry](assets/b1_rubric_example.png)
+
+The image below is an example of an `<id>_evidence.html` page for the same `answered` entry. It lists each cited edge with its intervention, predicate, outcome, source document, and source sentence, so each claim can be checked against the graph:
+
+![Example evidence page for an answered entry](assets/b1_evidence_example.png)
+
+Things to know when reading the output:
+
+- `no_evidence` entries have no `_evidence.html` page, because they cite no edges.
+- Fallback entries created after a processing error have an empty `extras` list and a `searched_for` value of `not searched: pipeline error…`. They are not evidence-based conclusions; rerun the question before relying on them.
+- `confidence` is a rubric-based score, not a calibrated probability. A `confidence` of `1.0` on a `no_evidence` entry means the missing-evidence rubric was fully satisfied, not that the graph is certain to lack the relationship.
+
 ## How it works
 
 1. **Read the question.** A model identifies the intervention or condition, the outcome, any stated context, and alternative search terms. These alternative terms help with wording differences but are not treated as automatically equivalent.
