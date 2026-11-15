@@ -21,7 +21,7 @@ from pathlib import Path
 from causa_nostra.answers.models import AnswerEntry, AnswersFile, TEAM_NAME
 from causa_nostra.answers.validate import check_extras
 from causa_nostra.graph.store import GraphStore
-from causa_nostra.pipeline.run import REPO_ROOT, answer_question
+from causa_nostra.pipeline.run import REPO_ROOT, DraftRejected, answer_question
 from causa_nostra.pipeline.stages import Stages
 from causa_nostra.pipeline.types import Question
 
@@ -100,6 +100,31 @@ def write_answers_atomic(path: str | Path, answers: AnswersFile) -> None:
         raise
 
 
+def _answer_with_retry(
+    question: Question,
+    store: GraphStore,
+    stages: Stages,
+    repo_root: Path,
+    max_revisions: int,
+) -> tuple[AnswerEntry, list[str]]:
+    """Run one question, retrying once on unexpected errors (e.g. transient LLM failures).
+
+    `DraftRejected` is not retried: it is a deterministic verification outcome.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            draft = answer_question(question, store, stages, max_revisions=max_revisions)
+            return sanitize_entry(draft, store, repo_root)
+        except DraftRejected:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            log.warning("question %s attempt %d failed: %s", question.id, attempt + 1, exc)
+    assert last_exc is not None
+    raise last_exc
+
+
 def run_batch(
     questions: Iterable[Question],
     store: GraphStore,
@@ -113,14 +138,15 @@ def run_batch(
     questions = list(questions)
     entries: dict[str, AnswerEntry] = {}
     warnings: list[str] = []
+    failed: list[str] = []
 
     for question in questions:
         try:
-            draft = answer_question(question, store, stages, max_revisions=max_revisions)
-            entry, repairs = sanitize_entry(draft, store, repo_root)
+            entry, repairs = _answer_with_retry(question, store, stages, repo_root, max_revisions)
             warnings.extend(repairs)
         except Exception as exc:  # per-question isolation: one failure must not stop the batch
             log.exception("question %s failed", question.id)
+            failed.append(question.id)
             entry = fallback_entry(question.id, f"{type(exc).__name__}: {exc}")
         entries[question.id] = entry
 
@@ -129,6 +155,8 @@ def run_batch(
 
     for message in warnings:
         log.warning(message)
+    if failed:
+        log.warning("pipeline failed for %d question(s): %s", len(failed), ", ".join(failed))
 
     answers = AnswersFile(team=TEAM_NAME, answers=[entries[q.id] for q in questions])
     write_answers_atomic(output_path, answers)
