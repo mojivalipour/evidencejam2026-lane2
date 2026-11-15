@@ -1,5 +1,25 @@
 # TODOs
 
+## Hybrid retrieval (next)
+
+- [ ] Measure the baseline on `questions.yaml`: record which practice questions get `no_evidence` and why (the `outputs/real_run.json` cases: b2, c3, c7, b4, b5).
+- [ ] Write the per-signal ranks (`retrieval_ranks`) into the verifier's search log.
+- [ ] Update the reasoner and verifier prompts so they check that both the intervention and the outcome are covered, since one-sided edges can now appear.
+- [ ] Compare the baseline and fused results on the practice questions before keeping the change.
+
+## Synonym expansion (after hybrid retrieval)
+
+- [ ] Ask `QuestionProcessor` for several synonyms per side, including measurement terms the graph uses (e.g. "emissions" → "methane flux").
+- [ ] Keep synonyms as extra inputs to the same BM25 signals, not as a separate stage. Label them as search candidates, not equivalences.
+- [ ] Check generated synonyms against the graph vocabulary and log which ones match nothing.
+- [ ] Add tests for synonym-driven recall (e.g. b2 "methane emissions" reaches "methane flux" edges).
+
+## Graph-neighbour signal (optional, only if measured)
+
+- [ ] Only if evaluation shows same-entity findings are missed: link question terms to graph nodes and add one-hop neighbour edges as an extra RRF signal.
+- [ ] Tag neighbour edges in the trace so the reasoner knows they are not direct matches.
+- [ ] Do not chain edges to infer a new effect. Count edges from one document as one study.
+
 ## Graph vocabulary (deferred)
 
 - [ ] Measure the baseline first: do the current search terms miss relevant graph labels on the practice questions?

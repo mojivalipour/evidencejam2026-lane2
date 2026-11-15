@@ -27,6 +27,8 @@ Retrieve = Callable[[QuestionFrame], list[EvidenceRecord]]
 Reason = Callable[[Question, QuestionFrame, list[EvidenceRecord], list[str]], AnswerEntry]
 # Verify: question, frame, draft, retrieved records (top k) -> verification
 Verify = Callable[[Question, QuestionFrame, AnswerEntry, list[EvidenceRecord]], Verification]
+# Refine: question, frame whose search found no evidence -> frame with broader search terms
+Refine = Callable[[Question, QuestionFrame], QuestionFrame]
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class Stages:
     retrieve: Retrieve
     reason: Reason
     verify: Verify
+    # Optional: used once when the first draft is no_evidence. None disables refinement.
+    refine: Refine | None = None
 
 
 def build_agent_stages(store: GraphStore, client: ChatClient, top_k: int = 20) -> Stages:
@@ -48,6 +52,7 @@ def build_agent_stages(store: GraphStore, client: ChatClient, top_k: int = 20) -
         retrieve=retrieval.retrieve,
         reason=reasoner.run,
         verify=verifier.run,
+        refine=processor.refine,
     )
 
 

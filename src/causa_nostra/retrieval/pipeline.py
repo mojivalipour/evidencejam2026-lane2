@@ -1,31 +1,34 @@
-"""Retrieval: question frame -> evidence records that match BOTH sides of the question.
+"""Retrieval: question frame -> evidence records, ranked by reciprocal rank fusion (RRF).
 
-A question asks what an intervention does to an outcome. An edge is a candidate
-only if its subject node matches the intervention AND its object node matches
-the outcome. Searching the two sides separately keeps out edges that match one
-side only, or that match the wrong way round (the outcome as the cause).
+Three BM25 signals score every record for one frame:
+- subject: the intervention words against the subject labels,
+- object: the outcome words against the object labels,
+- fulltext: all question words against the full record text.
 
-Steps for one frame:
-1. Search subject texts with the intervention words, object texts with the outcome words.
-2. Keep edges found on both sides whose score on each side is at least
-   `min_relative_score` of the best score on that side.
-3. If nothing is left, broaden once: keep every edge found on both sides.
-4. Rank by the sum of the two relative scores and return the best `top_k`.
+Each signal gives every matching edge a 1-based rank. An edge's fused score is
+the sum over signals of 1 / (RRF_K + rank), so an edge ranked well by several
+signals (e.g. matching both sides) rises to the top. An edge matching only one
+side is still returned, ranked lower. Ranks are used, not raw BM25 scores, so no
+threshold needs tuning.
 
-An empty list means no edge links the two sides. A frame with an empty
-intervention or an empty outcome (the no-LLM placeholder) cannot be searched by
-side, so it falls back to one broad search over the full record text.
+Each returned record carries `retrieval_ranks`, the per-signal ranks, so the
+search log shows which signal found it. There is one code path for every frame;
+a frame with an empty side simply yields no hits from that side's signal.
 
-The index is built once per graph. Each call sees one frame only.
+The indexes are built once per graph. Each call sees one frame only.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable
 
 from causa_nostra.pipeline.types import QuestionFrame
 from causa_nostra.retrieval.bm25 import BM25Index
 from causa_nostra.retrieval.records import EvidenceRecord
+
+# Standard RRF constant: dampens the gap between top ranks (Cormack et al., 2009).
+RRF_K = 60
 
 
 def side_queries(frame: QuestionFrame) -> tuple[str, str]:
@@ -45,69 +48,45 @@ def side_queries(frame: QuestionFrame) -> tuple[str, str]:
 
 
 def search_query(frame: QuestionFrame) -> str:
-    """Human-readable record of the two side queries, for the verifier's log."""
+    """Human-readable record of the side queries, for the verifier's log."""
     subject_query, object_query = side_queries(frame)
     return f"subject side: [{subject_query}] | object side: [{object_query}]"
 
 
-def _relative_scores(index: BM25Index, query: str) -> dict[str, float]:
-    """Score of each matching document as a share of the best score (0 to 1)."""
-    hits = index.search(query)
-    if not hits:
-        return {}
-    best = hits[0].score
-    if best <= 0:  # every match scored 0 (only very common words matched): treat them as equal
-        return {hit.doc_id: 1.0 for hit in hits}
-    return {hit.doc_id: hit.score / best for hit in hits}
-
-
 class RetrievalPipeline:
-    """Two-sided BM25 retrieval over evidence records."""
+    """Reciprocal-rank-fusion retrieval over subject, object and full-text BM25 signals."""
 
-    def __init__(
-        self,
-        records: Iterable[EvidenceRecord],
-        top_k: int = 20,
-        min_relative_score: float = 0.3,
-    ) -> None:
+    def __init__(self, records: Iterable[EvidenceRecord], top_k: int = 20) -> None:
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
-        if not 0.0 <= min_relative_score <= 1.0:
-            raise ValueError("min_relative_score must be between 0 and 1")
         self._records = {r.edge_id: r for r in records}
         self._top_k = top_k
-        self._min_relative_score = min_relative_score
 
         self._subjects = BM25Index((r.edge_id, r.subject_label) for r in self._records.values())
         self._objects = BM25Index((r.edge_id, r.object_label) for r in self._records.values())
         self._full_text = BM25Index((r.edge_id, r.text) for r in self._records.values())
 
     def retrieve(self, frame: QuestionFrame) -> list[EvidenceRecord]:
-        if not frame.intervention.strip() or not frame.outcome.strip():
-            return self._broad_search(frame)
-
         subject_query, object_query = side_queries(frame)
-        subject_scores = _relative_scores(self._subjects, subject_query)
-        object_scores = _relative_scores(self._objects, object_query)
-        both = [edge_id for edge_id in subject_scores if edge_id in object_scores]
+        fulltext_query = " ".join(
+            [frame.intervention, frame.outcome, *frame.intervention_terms, *frame.outcome_terms, *frame.search_terms]
+        )
+        signals = {
+            "subject": self._subjects.search(subject_query),
+            "object": self._objects.search(object_query),
+            "fulltext": self._full_text.search(fulltext_query),
+        }
 
-        strong = [
-            edge_id
-            for edge_id in both
-            if subject_scores[edge_id] >= self._min_relative_score
-            and object_scores[edge_id] >= self._min_relative_score
-        ]
-        chosen = strong or both  # broaden once when the strict filter leaves nothing
+        fused: dict[str, float] = defaultdict(float)
+        ranks: dict[str, dict[str, int]] = defaultdict(dict)
+        for name, hits in signals.items():
+            for rank, hit in enumerate(hits, start=1):
+                fused[hit.doc_id] += 1.0 / (RRF_K + rank)
+                ranks[hit.doc_id][name] = rank
 
-        # Highest combined score first; edge id breaks ties so the order is stable.
-        chosen.sort(key=lambda edge_id: (-(subject_scores[edge_id] + object_scores[edge_id]), edge_id))
-        return [self._records[edge_id] for edge_id in chosen[: self._top_k]]
-
-    def _broad_search(self, frame: QuestionFrame) -> list[EvidenceRecord]:
-        """One query over the full record text, for frames without two sides."""
-        query = " ".join([frame.intervention, frame.outcome, *frame.search_terms])
-        hits = self._full_text.search(query, top_k=self._top_k)
-        return [self._records[hit.doc_id] for hit in hits]
+        # Highest fused score first; edge id breaks ties so the order is stable.
+        ordered = sorted(fused, key=lambda edge_id: (-fused[edge_id], edge_id))[: self._top_k]
+        return [self._records[edge_id].model_copy(update={"retrieval_ranks": ranks[edge_id]}) for edge_id in ordered]
 
 
 if __name__ == "__main__":
@@ -121,4 +100,4 @@ if __name__ == "__main__":
     pipeline = RetrievalPipeline(build_records(GraphStore.from_json("causal_graph.json")))
     frame = QuestionFrame(question_id="demo", intervention=intervention, outcome=outcome)
     for record in pipeline.retrieve(frame):
-        print(f"{record.edge_id}  [{record.outcome_direction}]  {record.subject_label[:50]} -> {record.object_label[:60]}")
+        print(f"{record.edge_id}  {record.retrieval_ranks}  {record.subject_label[:50]} -> {record.object_label[:60]}")
