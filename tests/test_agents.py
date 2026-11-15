@@ -206,6 +206,15 @@ def test_verifier_no_evidence_missing_items_fail():
     assert result.score == pytest.approx(0.0)
 
 
+def test_verifier_no_evidence_cannot_pass_when_it_names_supporting_edges():
+    # Regression: all items passed, yet the verifier listed edges that bear on the question.
+    reply = json.dumps({"items": _N_PASS, "problems": [], "supporting_edge_ids": ["e1"]})
+    result = Verifier(FakeClient(reply)).run(QUESTION, FRAME, _no_evidence_draft(), [_record()])
+    assert result.passed is False
+    assert result.supporting_edge_ids == ["e1"]
+    assert "bear on the question" in result.problems[0]
+
+
 def test_verifier_receives_structured_metadata_and_search_log():
     client = FakeClient(json.dumps({"items": _items(), "problems": []}))
     frame = QuestionFrame(question_id="H-1", intervention="burning", outcome="grass cover",

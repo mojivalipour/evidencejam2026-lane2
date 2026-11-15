@@ -15,13 +15,28 @@ from causa_nostra.answers.validate import check_entry, check_file
 from causa_nostra.graph.store import GraphStore
 from causa_nostra.pipeline.stages import Stages
 from causa_nostra.pipeline.trace import stage_debug, stage_info
-from causa_nostra.pipeline.types import Question
+from causa_nostra.pipeline.types import Question, Verification
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class DraftRejected(RuntimeError):
     """A draft still cites unknown edges after the allowed revisions."""
+
+
+def _verification_feedback(verification: Verification) -> list[str]:
+    """Feedback for the reasoner's revision: what failed, which edges bear on the question, and why."""
+    feedback = list(verification.problems) or ["verification failed"]
+    failed = [f"{name}={value}" for name, value in verification.criteria.items() if value != "pass"]
+    if failed:
+        feedback.append("Failed criteria: " + ", ".join(failed))
+    if verification.supporting_edge_ids:
+        feedback.append(
+            "Retrieved edges that bear on the question: "
+            + ", ".join(verification.supporting_edge_ids)
+            + ". Use them in the answer, or state why each one does not answer the question."
+        )
+    return feedback
 
 
 def answer_question(
@@ -72,7 +87,7 @@ def answer_question(
                     draft = draft.model_copy(update={"confidence": verification.score})
                 stage_info(qid, "done", "accepted after %d attempt(s)", attempt + 1)
                 return draft
-            problems = verification.problems or ["verification failed"]
+            problems = _verification_feedback(verification)
         if attempt == max_revisions:
             break
         feedback = problems

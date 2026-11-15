@@ -110,10 +110,15 @@ class Verifier(Agent):
         raw_supporting = data.get("supporting_edge_ids")
         supporting = [e for e in raw_supporting if isinstance(e, str) and e in by_id] if isinstance(raw_supporting, list) else []
 
-        if not result.passed and not problems:
+        passed = result.passed
+        if not answered and supporting:
+            # A missing-evidence draft cannot pass when the verifier itself names retrieved edges that bear on the question.
+            passed = False
+            problems.append(f"no_evidence draft, but retrieved edges bear on the question: {', '.join(supporting)}")
+        if not passed and not problems:
             problems = [f"gated items failed: {', '.join(result.failed_gates)}"]
         return Verification(
-            passed=result.passed,
+            passed=passed,
             criteria=result.criteria,
             problems=problems,
             supporting_edge_ids=supporting,
